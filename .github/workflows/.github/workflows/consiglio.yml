@@ -1,0 +1,71 @@
+name: APY Daily Vault Suggestion
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # Ogni giorno alle 7:00 UTC (9:00 italiane)
+  workflow_dispatch:
+
+jobs:
+  suggest-vault:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq bc curl
+
+      - name: Fetch Beefy APYs and Compare Vaults
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          # Vault preferito attuale
+          CURRENT_VAULT="stargate-v2-arb-usdt"
+
+          # Lista vault sicuri da confrontare (solo stablecoin su chain sicure)
+          VAULTS=(
+            "stargate-v2-arb-usdt"
+            "aave-arb-usdt"
+            "aave-arb-usdc"
+            "morpho-op-usdc"
+            "radiant-arb-usdt"
+            "radiant-arb-usdc"
+          )
+
+          # Scarica APY Beefy
+          RAW=$(curl -s https://api.beefy.finance/apy)
+
+          # Ricava APY attuale del vault principale
+          CURRENT_APY=$(echo "$RAW" | jq -r ".\"$CURRENT_VAULT\"")
+          CURRENT_APY_PCT=$(echo "$CURRENT_APY * 100" | bc -l | awk '{printf "%.2f", $1}')
+
+          BEST_VAULT="$CURRENT_VAULT"
+          BEST_APY=$CURRENT_APY
+
+          MSG="📅 Report giornaliero – $(date +"%d %b %Y")\n\n✅ Vault attuale: $CURRENT_VAULT → ${CURRENT_APY_PCT}%\n\n📈 Vault migliori oggi:\n"
+
+          for VAULT in "${VAULTS[@]}"; do
+            APY=$(echo "$RAW" | jq -r ".\"$VAULT\"")
+            if [[ "$APY" != "null" && "$APY" != "" ]]; then
+              APY_PCT=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $1}')
+              MSG+="• $VAULT → ${APY_PCT}%\n"
+              # Se troviamo un APY migliore
+              if (( $(echo "$APY > $BEST_APY" | bc -l) )); then
+                BEST_VAULT="$VAULT"
+                BEST_APY="$APY"
+              fi
+            fi
+          done
+
+          # Confronto finale e suggerimento
+          if [[ "$BEST_VAULT" != "$CURRENT_VAULT" ]]; then
+            BEST_APY_PCT=$(echo "$BEST_APY * 100" | bc -l | awk '{printf "%.2f", $1}')
+            MSG+="\n💡 Suggerimento: valuta di spostarti su $BEST_VAULT se cerchi APY più alto (${BEST_APY_PCT}%)."
+          else
+            MSG+="\n👌 Nessun vault più profittevole oggi. Resta dove sei."
+          fi
+
+          # Invia su Telegram
+          curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d text="$MSG" \
+            -d parse_mode="Markdown"
