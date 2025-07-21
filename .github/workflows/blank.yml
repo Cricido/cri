@@ -13,25 +13,23 @@ jobs:
         run: |
           echo "📡 Recupero APY da Beefy..."
 
-          RAW=$(curl -s https://api.beefy.finance/apy)
-          APY=$(echo "$RAW" | grep -oP '"stargate-v2-arb-usdt":\K[0-9.]+')
+          # APY in formato float esatto
+          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt"')
 
           echo "📈 APY ricevuto: $APY"
 
-          # Converti APY in % leggibile (es. 0.1458 → 14.58%)
+          # Converti in percentuale leggibile (es. 0.1458 → 14.58%)
           APY_INT=$(echo "$APY * 100" | awk '{printf "%.2f", $1}')
           echo "✅ APY convertito: $APY_INT%"
 
-          # Soglia percentuale sotto la quale inviare avviso (es. 9%)
           SOGLIA=9.0
 
           if (( $(echo "$APY_INT < $SOGLIA" | bc -l) )); then
-            MSG="⚠️ ALERT: L'APY di stargate-v2-arb-usdt è sceso a ${APY_INT}%. Valuta se uscire."
+            MSG="⚠️ ALERT: L'APY del vault Beefy USDT è sceso a ${APY_INT}%. Valuta se uscire."
           else
             MSG="✅ APY OK: il vault rende ${APY_INT}%. Nessuna azione necessaria."
           fi
 
-          # Invia messaggio Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG"
