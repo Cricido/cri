@@ -13,22 +13,20 @@ jobs:
         run: |
           echo "📡 Recupero APY da Beefy..."
 
-          # Recupera il valore dell'APY (es. 0.15 = 15%)
           RAW=$(curl -s https://api.beefy.finance/apy)
           APY=$(echo "$RAW" | grep -oP '"stargate-v2-arb-usdt":\K[0-9.]+')
 
           echo "📈 APY ricevuto: $APY"
 
-          # Converti in percentuale con due decimali (es. 0.15 → 15.00)
+          # Converti APY in % leggibile (es. 0.1458 → 14.58%)
           APY_INT=$(echo "$APY * 100" | awk '{printf "%.2f", $1}')
           echo "✅ APY convertito: $APY_INT%"
 
-          # Soglia in percentuale decimale
+          # Soglia percentuale sotto la quale inviare avviso (es. 9%)
           SOGLIA=9.0
 
-          # Confronto e messaggio
           if (( $(echo "$APY_INT < $SOGLIA" | bc -l) )); then
-            MSG="⚠️ ALERT: L'APY del vault Beefy USDT è sceso a ${APY_INT}%. Valuta se uscire."
+            MSG="⚠️ ALERT: L'APY di stargate-v2-arb-usdt è sceso a ${APY_INT}%. Valuta se uscire."
           else
             MSG="✅ APY OK: il vault rende ${APY_INT}%. Nessuna azione necessaria."
           fi
