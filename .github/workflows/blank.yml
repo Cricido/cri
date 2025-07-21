@@ -12,11 +12,19 @@ jobs:
       - name: Check APY & Send Telegram
         run: |
           echo "Fetching APY..."
-          APY=$(curl -s https://api.beefy.finance/apy | jq -r '.["stargate-v2-arb-usdt"]')
-          echo "APY = $APY"
+          RAW=$(curl -s https://api.beefy.finance/apy)
+          APY=$(echo "$RAW" | grep -oP '"stargate-v2-arb-usdt":\K[0-9.]+')
+          echo "APY ricevuto: $APY"
 
-          if [ "$(echo "$APY < 0.09" | bc)" -eq 1 ]; then
-            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=⚠️ ALERT: L'APY è sceso a $(echo $APY | awk '{printf "%.2f", $1 * 100}')%"
+          APY_INT=$(echo "$APY * 100" | awk '{printf "%.2f", $1}')
+
+          # Soglia: 9% = 0.09
+          if [ "$(echo "$APY < 0.09" | awk '{print ($1 < 0.09) ? 1 : 0}')" -eq 1 ]; then
+            MSG="⚠️ ALERT: L'APY è sceso a $APY_INT%"
           else
-            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=✅ APY OK: $(echo $APY | awk '{printf "%.2f", $1 * 100}')%"
+            MSG="✅ APY OK: $APY_INT%"
           fi
+
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.CHAT_ID }} \
+            -d text="$MSG"
