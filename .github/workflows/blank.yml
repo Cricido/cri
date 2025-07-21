@@ -1,19 +1,58 @@
+name: APY Telegram Alert
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # Ogni giorno alle 7:00 UTC (9:00 CEST)
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
       - name: Check APY & Send Telegram
         run: |
+          # Installa jq e bc (bc è già presente, ma jq no)
+          sudo apt-get update && sudo apt-get install -y jq
+
           echo "📡 Recupero APY da Beefy..."
 
-          RAW=$(curl -s https://api.beefy.finance/apy)
-          echo "📦 JSON: $RAW" | head -c 300
+          # Recupera APY
+          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt" // "error"')
+          
+          echo "DEBUG: APY grezzo dall'API: $APY"
+          
+          if [[ "$APY" == "error" || -z "$APY" || ! "$APY" =~ ^[0-9.]+$ ]]; then
+            MSG="❌ ERRORE: Impossibile recuperare o validare l'APY (valore: $APY). Controlla l'API."
+            echo "$MSG"
+          else
+            # Calcola APY in percentuale (usa bc per moltiplicazione)
+            APY_INT=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+            echo "DEBUG: APY convertito (punto): $APY_INT"
+            
+            # Opzionale: Converti punto in virgola per notazione italiana (es. 14.58 → 14,58)
+            APY_INT_COMMA=$(echo "$APY_INT" | sed 's/\./,/')
+            echo "DEBUG: APY convertito (virgola): $APY_INT_COMMA"
+            
+            # Usa la versione con virgola nel messaggio (cambia se preferisci punto)
+            APY_DISPLAY=$APY_INT_COMMA
 
-          APY=$(echo "$RAW" | jq -r '."stargate-v2-arb-usdt"')
-          echo "🧪 DEBUG APY grezzo = $APY"
+            if [[ -z "$APY_INT" || "$APY_INT" == "0.00" ]]; then
+              MSG="❌ ERRORE: Calcolo APY fallito (grezzo: $APY)."
+            else
+              SOGLIA=9.0
+              # Confronto (usa bc per floating point)
+              if (( $(echo "$APY_INT < $SOGLIA" | bc -l) )); then
+                MSG="⚠️ ALERT: L'APY del vault Beefy USDT è sceso a ${APY_DISPLAY}%. Valuta se uscire."
+              else
+                MSG="✅ APY OK: il vault rende ${APY_DISPLAY}%. Nessuna azione necessaria."
+              fi
+            fi
 
-          # Calcolo percentuale corretta
-          APY_INT=$(awk "BEGIN {printf \"%.2f\", $APY * 100}")
-          echo "✅ APY in % = $APY_INT"
+            echo "DEBUG: Messaggio finale: $MSG"
+          fi
 
-          MSG="Rendimento attuale del vault Beefy: ${APY_INT}%"
-
+          # Invia messaggio a Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
-            -d text="$MSG"
+            -d text="$MSG" \
+            -d parse_mode="Markdown"
