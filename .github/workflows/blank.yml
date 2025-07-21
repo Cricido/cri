@@ -1,34 +1,18 @@
-name: APY Telegram Alert
-
-on:
-  schedule:
-    - cron: '0 7 * * *'  # ogni giorno alle 9:00 italiane
-  workflow_dispatch:
-
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    steps:
       - name: Check APY & Send Telegram
         run: |
           echo "📡 Recupero APY da Beefy..."
 
-          # APY in formato float esatto
-          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt"')
+          RAW=$(curl -s https://api.beefy.finance/apy)
+          echo "📦 JSON: $RAW" | head -c 300
 
-          echo "📈 APY ricevuto: $APY"
+          APY=$(echo "$RAW" | jq -r '."stargate-v2-arb-usdt"')
+          echo "🧪 DEBUG APY grezzo = $APY"
 
-          # Converti in percentuale leggibile (es. 0.1458 → 14.58%)
-          APY_INT=$(echo "$APY * 100" | awk '{printf "%.2f", $1}')
-          echo "✅ APY convertito: $APY_INT%"
+          # Calcolo percentuale corretta
+          APY_INT=$(awk "BEGIN {printf \"%.2f\", $APY * 100}")
+          echo "✅ APY in % = $APY_INT"
 
-          SOGLIA=9.0
-
-          if (( $(echo "$APY_INT < $SOGLIA" | bc -l) )); then
-            MSG="⚠️ ALERT: L'APY del vault Beefy USDT è sceso a ${APY_INT}%. Valuta se uscire."
-          else
-            MSG="✅ APY OK: il vault rende ${APY_INT}%. Nessuna azione necessaria."
-          fi
+          MSG="Rendimento attuale del vault Beefy: ${APY_INT}%"
 
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
