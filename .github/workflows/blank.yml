@@ -1,10 +1,9 @@
-
 name: APY Telegram Alert
 
 on:
   schedule:
     - cron: '0 7 * * *'  # ogni giorno alle 9:00 italiane
-  workflow_dispatch:     # puoi avviarla anche manualmente
+  workflow_dispatch:
 
 jobs:
   notify:
@@ -12,10 +11,12 @@ jobs:
     steps:
       - name: Check APY & Send Telegram
         run: |
-          apt update && apt install -y curl jq bc
-          APY=$(curl -s https://api.beefy.finance/apy | jq '.["stargate-v2-arb-usdt"]')
-          if (( $(echo "$APY < 0.09" | bc -l) )); then
-            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=⚠️ ALERT: L'APY è sceso a $(echo $APY | awk '{printf "%.2f", $1*100}')%"
+          echo "Fetching APY..."
+          APY=$(curl -s https://api.beefy.finance/apy | jq -r '.["stargate-v2-arb-usdt"]')
+          echo "APY = $APY"
+
+          if [ "$(echo "$APY < 0.09" | bc)" -eq 1 ]; then
+            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=⚠️ ALERT: L'APY è sceso a $(echo $APY | awk '{printf "%.2f", $1 * 100}')%"
           else
-            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=✅ APY OK: $(echo $APY | awk '{printf "%.2f", $1*100}')%"
+            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage?chat_id=${{ secrets.CHAT_ID }}&text=✅ APY OK: $(echo $APY | awk '{printf "%.2f", $1 * 100}')%"
           fi
