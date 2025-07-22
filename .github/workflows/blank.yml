@@ -2,8 +2,10 @@ name: APY Telegram Alert
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Ogni giorno alle 7:00 UTC (9:00 CEST)
-  workflow_dispatch:
+    - cron: '0 6 * * *'   # 8:00 CEST
+    - cron: '0 11 * * *'  # 13:00 CEST
+    - cron: '0 16 * * *'  # 18:00 CEST
+    - cron: '0 21 * * *'  # 23:00 CEST  workflow_dispatch:
 
 jobs:
   notify:
