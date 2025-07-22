@@ -17,50 +17,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl bc
 
-      - name: Leggi dati Morpho e aggiorna CSV
+      - name: Check APY & Update CSV
         run: |
           VAULT_ADDRESS="0x9a615cb3e9fa9e75070e5df5a75df6f2a75ed130"
           WALLET="0x6bD872Ef0749eBa102A9e7Cd9FC24Ed2A5C88679"
           DATE=$(date +'%Y-%m-%d')
 
+          echo "📡 Interrogazione Morpho GraphQL..."
           RESPONSE=$(curl -s -X POST https://api.morpho.org/graphql \
             -H "Content-Type: application/json" \
             -d '{
               "query": "query { vaultByAddress(address: \"'$VAULT_ADDRESS'\") { state { totalAssetsUsd totalSupply rewards { apr } allocation { market { state { supplyApr } } } } } }"
             }')
 
-          BASE_APR=$(echo $RESPONSE | jq -r '.data.vaultByAddress.state.allocation.market.state.supplyApr')
-          REWARD_APR=$(echo $RESPONSE | jq -r '.data.vaultByAddress.state.rewards[0].apr')
+          BASE_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.allocation.market.state.supplyApr')
+          REWARD_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.rewards[0].apr')
           APY=$(echo "$BASE_APR + $REWARD_APR" | bc -l)
-          APY_DISPLAY=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+          APY_DISPLAY=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $1}')
+          echo "APY calcolato: $APY_DISPLAY%"
 
-          # Leggi saldo attuale
-          BALANCE_RES=$(curl -s "https://api.llama.fi/protocol/morpho-blue")
-          USD_VALUE=$(echo $BALANCE_RES | jq -r '.tvl')
+          BALANCE=$(curl -s "https://api.llama.fi/protocol/morpho-blue" | jq -r '.tvl')
+          echo "Saldo attuale stimato: $BALANCE USD"
 
-          # Se c’è già un file, confronta con ieri
           PREV_BALANCE="0.00"
           if [ -f history.csv ]; then
             PREV_BALANCE=$(tail -n 1 history.csv | cut -d',' -f3)
           fi
 
-          GAIN=$(echo "$USD_VALUE - $PREV_BALANCE" | bc -l | awk '{printf "%.2f", $0}')
+          GAIN=$(echo "$BALANCE - $PREV_BALANCE" | bc -l | awk '{printf "%.2f", $1}')
+          echo "$DATE,$APY_DISPLAY,$BALANCE" >> history.csv
 
-          echo "$DATE,$APY_DISPLAY,$USD_VALUE" >> history.csv
-
-          MSG="📊 *Morpho Steckhouse USDT – Report $DATE*\nSaldo: *$USD_VALUE USD*\nAPY: *$APY_DISPLAY%*\nProfitto da ieri: *$GAIN USD*"
-
-          echo "$MSG"
+          MSG="📊 *Morpho Steckhouse USDT – Report $DATE*\nSaldo: *$BALANCE USD*\nAPY: *$APY_DISPLAY%*\nProfitto da ieri: *$GAIN USD*"
+          echo "Messaggio Telegram:\n$MSG"
 
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG" \
             -d parse_mode="Markdown"
 
-      - name: Commit aggiornamento storico
+      - name: Commit storico
         run: |
           git config user.name "bot"
           git config user.email "bot@example.com"
+          git pull --rebase
           git add history.csv
           git commit -m "Aggiornamento storico $DATE" || echo "Nessuna modifica"
           git push
