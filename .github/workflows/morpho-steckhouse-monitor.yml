@@ -17,9 +17,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check APY & TVL, Telegram + Storico
+      - name: Check APY & TVL, Telegram + Storico, Commit & Push
         run: |
-          sudo apt-get update && sudo apt-get install -y jq
+          apt-get update && apt-get install -y jq
 
           echo "📡 Recupero APY da Beefy..."
           APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt" // "error"')
@@ -31,6 +31,16 @@ jobs:
 
           # Timestamp
           NOW=$(date '+%Y-%m-%d %H:%M:%S')
+
+          # Verifica se ci sono errori nel recupero dati
+          if [[ "$APY" == "error" || "$TVL" == "error" ]]; then
+            echo "❌ Errore: Impossibile recuperare APY/TVL."
+            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+              -d chat_id=${{ secrets.CHAT_ID }} \
+              -d text="❌ Errore: Impossibile recuperare APY/TVL a $NOW" \
+              -d parse_mode="Markdown"
+            exit 0  # Esci senza fallire il job
+          fi
 
           # Verifica APY
           if [[ "$APY" == "error" || -z "$APY" || ! "$APY" =~ ^[0-9.]+$ ]]; then
@@ -91,12 +101,24 @@ jobs:
           echo "DEBUG: Scrivo su storico.csv → $NOW,$APY_CSV,$TVL_CSV"
           echo "$NOW,$APY_CSV,$TVL_CSV" >> storico.csv
 
-      - name: Commit & Push storico.csv
-        run: |
+          # Configura Git
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
+          # Commit
           git add storico.csv
           git commit -m "Aggiornamento APY/TVL $NOW" || echo "Nessuna modifica da committare"
-          git pull --rebase origin main
+
+          # Pull con rebase e gestione errori
+          git pull --rebase origin main || (git rebase --abort && echo "Rebase fallito (possibile conflitto), skipping push" && exit 0)
+
+          # Push
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.CHAT_ID }} \
+            -d text="❌ Workflow fallito: Controlla i log su GitHub" \
+            -d parse_mode="Markdown"
