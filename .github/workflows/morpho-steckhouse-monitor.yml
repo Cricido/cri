@@ -1,80 +1,33 @@
-#!/bin/bash
+name: Aggiornamento storico giornaliero
 
-# Configurazione
-TELEGRAM_TOKEN="IL_TUO_TELEGRAM_TOKEN"  # Sostituisci con il tuo token
-CHAT_ID="IL_TUO_CHAT_ID"                # Sostituisci con il tuo chat ID
-SOGLIA_TVL=10000000                     # Soglia in USD (10 milioni)
-API_URL="https://api.vaults.fyi/v1/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
-LOG_FILE="storico_tvl.csv"              # File locale per logging (creato automaticamente)
-INTERVALLO=3600                         # Intervallo in secondi (1 ora = 3600s). Imposta a 0 per run singolo.
-NOTIFICA_SEMRE=0                        # 1 = Invia Telegram a ogni check; 0 = Solo se basso o errore
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"  # Esegui ogni giorno alle 01:00 UTC
 
-# Funzione per inviare messaggio Telegram
-invia_telegram() {
-  local MSG="$1"
-  curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
-    -d chat_id="$CHAT_ID" \
-    -d text="$MSG" \
-    -d parse_mode="Markdown"
-}
+jobs:
+  push-storico:
+    runs-on: ubuntu-latest
 
-# Inizializza il log se non esiste
-if [ ! -f "$LOG_FILE" ]; then
-  echo "Timestamp,TVL_USD,Stato" > "$LOG_FILE"
-fi
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v3
 
-# Loop di monitoring (esci con Ctrl+C)
-while true; do
-  # Timestamp
-  NOW=$(date '+%Y-%m-%d %H:%M:%S')
+      - name: Configura Git
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@example.com"
 
-  # Recupera TVL
-  TVL=$(curl -s "$API_URL" | jq -r '.tvlUsd // "error"')
-  echo "DEBUG: TVL grezzo: $TVL (a $NOW)"
+      - name: Genera o aggiorna file (es. CSV)
+        run: |
+          echo "Esempio, dati, generati, $(date)" >> storico.csv
 
-  # Verifica TVL
-  if [[ "$TVL" == "error" || -z "$TVL" || ! "$TVL" =~ ^[0-9.]+$ ]]; then
-    TVL_MSG="❌ ERRORE: TVL non disponibile."
-    TVL_CSV="ERROR"
-    TVL_VALID=0
-  else
-    TVL_DISPLAY=$(printf "%'.2f" "$TVL")
-    TVL_CSV=$(printf "%.2f" "$TVL")
-    TVL_VALID=1
-  fi
+      - name: Commit e Push sicuro
+        run: |
+          git add .
+          git commit -m "Aggiornamento storico automatico" || echo "Nessun commit da fare"
 
-  # Messaggio stato
-  if [[ "$TVL_VALID" -eq 1 ]]; then
-    if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
-      STATO="BASSO"
-      TVL_MSG="⚠️ TVL bassa: ${TVL_DISPLAY} USD"
-    else
-      STATO="OK"
-      TVL_MSG="✅ TVL OK: ${TVL_DISPLAY} USD"
-    fi
-  else
-    STATO="ERRORE"
-  fi
+          # Sincronizza con il remoto (evita l'errore 'fetch first')
+          git pull --rebase origin main || echo "Nessun cambiamento remoto da integrare"
 
-  # Messaggio finale
-  MSG="📊 *Monitor TVL Morpho Steakhouse USDT*\n🕒 $NOW\n${TVL_MSG}"
-
-  # Invia notifica se basso/errore o sempre (basato su NOTIFICA_SEMRE)
-  if [[ "$NOTIFICA_SEMRE" -eq 1 || "$STATO" != "OK" ]]; then
-    invia_telegram "$MSG"
-    echo "Notifica inviata: $MSG"
-  fi
-
-  # Logga su file CSV
-  echo "$NOW,$TVL_CSV,$STATO" >> "$LOG_FILE"
-  echo "Loggato su $LOG_FILE"
-
-  # Se intervallo=0, esci dopo un run
-  if [[ "$INTERVALLO" -eq 0 ]]; then
-    break
-  fi
-
-  # Attendi intervallo
-  echo "Attendo $INTERVALLO secondi per il prossimo check..."
-  sleep "$INTERVALLO"
-done
+          git push origin main
