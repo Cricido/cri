@@ -1,0 +1,99 @@
+name: APY & TVL Telegram Alert
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 08:00 CEST
+    - cron: '0 11 * * *'  # 13:00 CEST
+    - cron: '0 16 * * *'  # 18:00 CEST
+    - cron: '0 21 * * *'  # 23:00 CEST
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check APY & TVL and Send Telegram
+        run: |
+          set -e
+
+          sudo apt-get update && sudo apt-get install -y jq bc
+
+          echo "📡 Recupero APY da Beefy..."
+          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt" // "error"')
+          echo "DEBUG: APY grezzo: $APY"
+
+          echo "📊 Recupero TVL da Vaults.fyi (Steakhouse USDT Morpho Ethereum)..."
+          TVL=$(curl -s "https://api.vaults.fyi/v1/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa" | jq -r '.tvlUsd // "error"')
+          echo "DEBUG: TVL grezzo: $TVL"
+
+          # -------------------------
+          # Validazione APY
+          # -------------------------
+          APY_VALID=1
+          if [[ "$APY" == "error" || -z "$APY" || ! "$APY" =~ ^[0-9.]+$ ]]; then
+            APY_MSG="❌ ERRORE: APY non valido ($APY)."
+            APY_VALID=0
+          else
+            APY_INT=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+            APY_DISPLAY=$(echo "$APY_INT" | sed 's/\./,/')
+          fi
+
+          # -------------------------
+          # Validazione TVL
+          # -------------------------
+          TVL_VALID=1
+          if [[ "$TVL" == "error" || -z "$TVL" || ! "$TVL" =~ ^[0-9.]+$ ]]; then
+            TVL_DISPLAY="N/D"
+            TVL_VALID=0
+          else
+            TVL_DISPLAY=$(printf "%'.2f" "$TVL")
+          fi
+
+          # -------------------------
+          # Soglie
+          # -------------------------
+          SOGLIA_APY=9.0        # % annua
+          SOGLIA_TVL=10000000   # 10M USD
+
+          # -------------------------
+          # Messaggi APY
+          # -------------------------
+          if [[ "$APY_VALID" -eq 1 ]]; then
+            if (( $(echo "$APY_INT < $SOGLIA_APY" | bc -l) )); then
+              APY_MSG="⚠️ APY basso: ${APY_DISPLAY}%"
+            else
+              APY_MSG="✅ APY OK: ${APY_DISPLAY}%"
+            fi
+          fi
+
+          # -------------------------
+          # Messaggi TVL
+          # -------------------------
+          if [[ "$TVL_VALID" -eq 1 ]]; then
+            if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
+              TVL_MSG="⚠️ TVL bassa: ${TVL_DISPLAY} USD"
+            else
+              TVL_MSG="✅ TVL OK: ${TVL_DISPLAY} USD"
+            fi
+          else
+            TVL_MSG="❌ TVL non disponibile"
+          fi
+
+          # -------------------------
+          # Messaggio finale
+          # -------------------------
+          TIMESTAMP="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          MSG="📈 *Monitor Morpho Steakhouse USDT*\n🕒 $TIMESTAMP\n${APY_MSG}\n${TVL_MSG}"
+
+          echo "DEBUG: Messaggio finale:"
+          echo -e "$MSG"
+
+          # -------------------------
+          # Invio Telegram
+          # -------------------------
+          RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.CHAT_ID }} \
+            -d text="$MSG" \
+            -d parse_mode="Markdown")
+
+          echo "DEBUG: Risposta Telegram: $RESPONSE"
