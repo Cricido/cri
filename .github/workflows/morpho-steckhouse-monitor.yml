@@ -1,124 +1,80 @@
-name: APY & TVL Telegram Alert
+#!/bin/bash
 
-on:
-  schedule:
-    - cron: '0 6 * * *'   # 08:00 CEST
-    - cron: '0 11 * * *'  # 13:00 CEST
-    - cron: '0 16 * * *'  # 18:00 CEST
-    - cron: '0 21 * * *'  # 23:00 CEST
-  workflow_dispatch:
+# Configurazione
+TELEGRAM_TOKEN="IL_TUO_TELEGRAM_TOKEN"  # Sostituisci con il tuo token
+CHAT_ID="IL_TUO_CHAT_ID"                # Sostituisci con il tuo chat ID
+SOGLIA_TVL=10000000                     # Soglia in USD (10 milioni)
+API_URL="https://api.vaults.fyi/v1/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
+LOG_FILE="storico_tvl.csv"              # File locale per logging (creato automaticamente)
+INTERVALLO=3600                         # Intervallo in secondi (1 ora = 3600s). Imposta a 0 per run singolo.
+NOTIFICA_SEMRE=0                        # 1 = Invia Telegram a ogni check; 0 = Solo se basso o errore
 
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+# Funzione per inviare messaggio Telegram
+invia_telegram() {
+  local MSG="$1"
+  curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+    -d chat_id="$CHAT_ID" \
+    -d text="$MSG" \
+    -d parse_mode="Markdown"
+}
 
-      - name: Check APY & TVL, Telegram + Storico, Commit & Push
-        run: |
-          apt-get update && apt-get install -y jq
+# Inizializza il log se non esiste
+if [ ! -f "$LOG_FILE" ]; then
+  echo "Timestamp,TVL_USD,Stato" > "$LOG_FILE"
+fi
 
-          echo "📡 Recupero APY da Beefy..."
-          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt" // "error"')
-          echo "DEBUG: APY grezzo: $APY"
+# Loop di monitoring (esci con Ctrl+C)
+while true; do
+  # Timestamp
+  NOW=$(date '+%Y-%m-%d %H:%M:%S')
 
-          echo "📊 Recupero TVL da Vaults.fyi..."
-          TVL=$(curl -s "https://api.vaults.fyi/v1/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa" | jq -r '.tvlUsd // "error"')
-          echo "DEBUG: TVL grezzo: $TVL"
+  # Recupera TVL
+  TVL=$(curl -s "$API_URL" | jq -r '.tvlUsd // "error"')
+  echo "DEBUG: TVL grezzo: $TVL (a $NOW)"
 
-          # Timestamp
-          NOW=$(date '+%Y-%m-%d %H:%M:%S')
+  # Verifica TVL
+  if [[ "$TVL" == "error" || -z "$TVL" || ! "$TVL" =~ ^[0-9.]+$ ]]; then
+    TVL_MSG="❌ ERRORE: TVL non disponibile."
+    TVL_CSV="ERROR"
+    TVL_VALID=0
+  else
+    TVL_DISPLAY=$(printf "%'.2f" "$TVL")
+    TVL_CSV=$(printf "%.2f" "$TVL")
+    TVL_VALID=1
+  fi
 
-          # Verifica se ci sono errori nel recupero dati
-          if [[ "$APY" == "error" || "$TVL" == "error" ]]; then
-            echo "❌ Errore: Impossibile recuperare APY/TVL."
-            curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id=${{ secrets.CHAT_ID }} \
-              -d text="❌ Errore: Impossibile recuperare APY/TVL a $NOW" \
-              -d parse_mode="Markdown"
-            exit 0  # Esci senza fallire il job
-          fi
+  # Messaggio stato
+  if [[ "$TVL_VALID" -eq 1 ]]; then
+    if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
+      STATO="BASSO"
+      TVL_MSG="⚠️ TVL bassa: ${TVL_DISPLAY} USD"
+    else
+      STATO="OK"
+      TVL_MSG="✅ TVL OK: ${TVL_DISPLAY} USD"
+    fi
+  else
+    STATO="ERRORE"
+  fi
 
-          # Verifica APY
-          if [[ "$APY" == "error" || -z "$APY" || ! "$APY" =~ ^[0-9.]+$ ]]; then
-            APY_MSG="❌ ERRORE: APY non valido ($APY)."
-            APY_CSV="ERROR"
-            APY_VALID=0
-          else
-            APY_INT=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
-            APY_DISPLAY=$(echo "$APY_INT" | sed 's/\./,/')
-            APY_CSV=$APY_INT
-            APY_VALID=1
-          fi
+  # Messaggio finale
+  MSG="📊 *Monitor TVL Morpho Steakhouse USDT*\n🕒 $NOW\n${TVL_MSG}"
 
-          # Verifica TVL
-          if [[ "$TVL" == "error" || -z "$TVL" || ! "$TVL" =~ ^[0-9.]+$ ]]; then
-            TVL_MSG="❌ TVL non disponibile"
-            TVL_CSV="ERROR"
-            TVL_VALID=0
-          else
-            TVL_DISPLAY=$(printf "%'.2f" "$TVL")
-            TVL_CSV=$(printf "%.2f" "$TVL")
-            TVL_VALID=1
-          fi
+  # Invia notifica se basso/errore o sempre (basato su NOTIFICA_SEMRE)
+  if [[ "$NOTIFICA_SEMRE" -eq 1 || "$STATO" != "OK" ]]; then
+    invia_telegram "$MSG"
+    echo "Notifica inviata: $MSG"
+  fi
 
-          # Soglie
-          SOGLIA_APY=9.0
-          SOGLIA_TVL=10000000
+  # Logga su file CSV
+  echo "$NOW,$TVL_CSV,$STATO" >> "$LOG_FILE"
+  echo "Loggato su $LOG_FILE"
 
-          # Messaggio APY
-          if [[ "$APY_VALID" -eq 1 ]]; then
-            if (( $(echo "$APY_INT < $SOGLIA_APY" | bc -l) )); then
-              APY_MSG="⚠️ APY basso: ${APY_DISPLAY}%"
-            else
-              APY_MSG="✅ APY OK: ${APY_DISPLAY}%"
-            fi
-          fi
+  # Se intervallo=0, esci dopo un run
+  if [[ "$INTERVALLO" -eq 0 ]]; then
+    break
+  fi
 
-          # Messaggio TVL
-          if [[ "$TVL_VALID" -eq 1 ]]; then
-            if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
-              TVL_MSG="⚠️ TVL bassa: ${TVL_DISPLAY} USD"
-            else
-              TVL_MSG="✅ TVL OK: ${TVL_DISPLAY} USD"
-            fi
-          fi
-
-          # Messaggio finale
-          MSG="📈 *Monitor Morpho Steakhouse USDT*\n🕒 $NOW\n${APY_MSG}\n${TVL_MSG}"
-          echo "DEBUG: $MSG"
-
-          # Invia su Telegram
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id=${{ secrets.CHAT_ID }} \
-            -d text="$MSG" \
-            -d parse_mode="Markdown"
-
-          # Scrive su CSV
-          echo "DEBUG: Scrivo su storico.csv → $NOW,$APY_CSV,$TVL_CSV"
-          echo "$NOW,$APY_CSV,$TVL_CSV" >> storico.csv
-
-          # Configura Git
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-
-          # Commit
-          git add storico.csv
-          git commit -m "Aggiornamento APY/TVL $NOW" || echo "Nessuna modifica da committare"
-
-          # Pull con rebase e gestione errori
-          git pull --rebase origin main || (git rebase --abort && echo "Rebase fallito (possibile conflitto), skipping push" && exit 0)
-
-          # Push
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
-
-      - name: Notify on Failure
-        if: failure()
-        run: |
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id=${{ secrets.CHAT_ID }} \
-            -d text="❌ Workflow fallito: Controlla i log su GitHub" \
-            -d parse_mode="Markdown"
+  # Attendi intervallo
+  echo "Attendo $INTERVALLO secondi per il prossimo check..."
+  sleep "$INTERVALLO"
+done
