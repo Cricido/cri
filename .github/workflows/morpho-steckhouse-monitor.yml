@@ -1,66 +1,102 @@
-name: Morpho Steckhouse Monitor
+name: APY & TVL Telegram Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'  # Ogni giorno alle 9:00 italiane
+    - cron: '0 6 * * *'   # 08:00 CEST
+    - cron: '0 11 * * *'  # 13:00 CEST
+    - cron: '0 16 * * *'  # 18:00 CEST
+    - cron: '0 21 * * *'  # 23:00 CEST
   workflow_dispatch:
 
 jobs:
-  monitor:
+  notify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install dependencies
+      - name: Check APY & TVL, Telegram + Storico
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl bc
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Leggi dati Morpho e aggiorna CSV
-        run: |
-          VAULT_ADDRESS="0x9a615cb3e9fa9e75070e5df5a75df6f2a75ed130"
-          WALLET="0x6bD872Ef0749eBa102A9e7Cd9FC24Ed2A5C88679"
-          DATE=$(date +'%Y-%m-%d')
+          echo "📡 Recupero APY da Beefy..."
+          APY=$(curl -s https://api.beefy.finance/apy | jq -r '."stargate-v2-arb-usdt" // "error"')
+          echo "DEBUG: APY grezzo: $APY"
 
-          RESPONSE=$(curl -s -X POST https://api.morpho.org/graphql \
-            -H "Content-Type: application/json" \
-            -d '{
-              "query": "query { vaultByAddress(address: \"'$VAULT_ADDRESS'\") { state { totalAssetsUsd totalSupply rewards { apr } allocation { market { state { supplyApr } } } } } }"
-            }')
+          echo "📊 Recupero TVL da Vaults.fyi..."
+          TVL=$(curl -s "https://api.vaults.fyi/v1/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa" | jq -r '.tvlUsd // "error"')
+          echo "DEBUG: TVL grezzo: $TVL"
 
-          BASE_APR=$(echo $RESPONSE | jq -r '.data.vaultByAddress.state.allocation.market.state.supplyApr')
-          REWARD_APR=$(echo $RESPONSE | jq -r '.data.vaultByAddress.state.rewards[0].apr')
-          APY=$(echo "$BASE_APR + $REWARD_APR" | bc -l)
-          APY_DISPLAY=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+          # Timestamp
+          NOW=$(date '+%Y-%m-%d %H:%M:%S')
 
-          # Leggi saldo attuale
-          BALANCE_RES=$(curl -s "https://api.llama.fi/protocol/morpho-blue")
-          USD_VALUE=$(echo $BALANCE_RES | jq -r '.tvl')
-
-          # Se c’è già un file, confronta con ieri
-          PREV_BALANCE="0.00"
-          if [ -f history.csv ]; then
-            PREV_BALANCE=$(tail -n 1 history.csv | cut -d',' -f3)
+          # Verifica APY
+          if [[ "$APY" == "error" || -z "$APY" || ! "$APY" =~ ^[0-9.]+$ ]]; then
+            APY_MSG="❌ ERRORE: APY non valido ($APY)."
+            APY_CSV="ERROR"
+            APY_VALID=0
+          else
+            APY_INT=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+            APY_DISPLAY=$(echo "$APY_INT" | sed 's/\./,/')
+            APY_CSV=$APY_INT
+            APY_VALID=1
           fi
 
-          GAIN=$(echo "$USD_VALUE - $PREV_BALANCE" | bc -l | awk '{printf "%.2f", $0}')
+          # Verifica TVL
+          if [[ "$TVL" == "error" || -z "$TVL" || ! "$TVL" =~ ^[0-9.]+$ ]]; then
+            TVL_MSG="❌ TVL non disponibile"
+            TVL_CSV="ERROR"
+            TVL_VALID=0
+          else
+            TVL_DISPLAY=$(printf "%'.2f" "$TVL")
+            TVL_CSV=$(printf "%.2f" "$TVL")
+            TVL_VALID=1
+          fi
 
-          echo "$DATE,$APY_DISPLAY,$USD_VALUE" >> history.csv
+          # Soglie
+          SOGLIA_APY=9.0
+          SOGLIA_TVL=10000000
 
-          MSG="📊 *Morpho Steckhouse USDT – Report $DATE*\nSaldo: *$USD_VALUE USD*\nAPY: *$APY_DISPLAY%*\nProfitto da ieri: *$GAIN USD*"
+          # Messaggio APY
+          if [[ "$APY_VALID" -eq 1 ]]; then
+            if (( $(echo "$APY_INT < $SOGLIA_APY" | bc -l) )); then
+              APY_MSG="⚠️ APY basso: ${APY_DISPLAY}%"
+            else
+              APY_MSG="✅ APY OK: ${APY_DISPLAY}%"
+            fi
+          fi
 
-          echo "$MSG"
+          # Messaggio TVL
+          if [[ "$TVL_VALID" -eq 1 ]]; then
+            if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
+              TVL_MSG="⚠️ TVL bassa: ${TVL_DISPLAY} USD"
+            else
+              TVL_MSG="✅ TVL OK: ${TVL_DISPLAY} USD"
+            fi
+          fi
 
+          # Messaggio finale
+          MSG="📈 *Monitor Morpho Steakhouse USDT*\n🕒 $NOW\n${APY_MSG}\n${TVL_MSG}"
+          echo "DEBUG: $MSG"
+
+          # Invia su Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG" \
             -d parse_mode="Markdown"
 
-      - name: Commit aggiornamento storico
+          # Scrive su CSV
+          echo "DEBUG: Scrivo su storico.csv → $NOW,$APY_CSV,$TVL_CSV"
+          echo "$NOW,$APY_CSV,$TVL_CSV" >> storico.csv
+
+      - name: Commit & Push storico.csv
         run: |
-          git config user.name "bot"
-          git config user.email "bot@example.com"
-          git add history.csv
-          git commit -m "Aggiornamento storico $DATE" || echo "Nessuna modifica"
-          git push
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          git add storico.csv
+          git commit -m "Aggiornamento APY/TVL $NOW" || echo "Nessuna modifica da committare"
+          git pull --rebase origin main
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
