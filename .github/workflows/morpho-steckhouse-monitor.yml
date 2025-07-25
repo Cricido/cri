@@ -23,7 +23,6 @@ jobs:
           TVL=$(echo "$RESPONSE" | jq -r '.totalAssetsUsd // "error"')
           APY=$(echo "$RESPONSE" | jq -r '.netApy // empty')
 
-          echo "DEBUG: TVL = $TVL"
-          echo "DEBUG: APY = $APY"
-
-          if [[ "$]()]()
+          if [[ "$TVL" == "error" || -z "$TVL" ]]; then
+            MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
+          el
