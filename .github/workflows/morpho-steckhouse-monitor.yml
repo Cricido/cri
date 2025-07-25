@@ -26,5 +26,4 @@ jobs:
           echo "DEBUG: TVL = $TVL"
           echo "DEBUG: APY = $APY"
 
-          if [[ "$TVL" == "error" || -z "$TVL" ]]; then
-            MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse
+          if [[ "$]()]()
