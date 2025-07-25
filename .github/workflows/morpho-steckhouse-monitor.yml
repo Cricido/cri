@@ -2,16 +2,19 @@ name: Morpho TVL Telegram Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # 9:00 CEST ogni giorno
+    - cron: '0 7 * * *'   # 09:00 CEST
   workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
       - name: Check TVL & Send Telegram
         run: |
-          # Installa jq
+          # Install tools
           sudo apt-get update && sudo apt-get install -y jq
 
           echo "📡 Recupero TVL da Morpho..."
@@ -19,19 +22,40 @@ jobs:
           # API Morpho Vault Steakhouse USDT (Ethereum)
           API_URL="https://blue-api.morpho.org/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
 
-          TVL=$(curl -s "$API_URL" | jq -r '.totalAssetsUsd // "error"')
+          RESPONSE=$(curl -s "$API_URL")
+          TVL=$(echo "$RESPONSE" | jq -r '.totalAssetsUsd // "error"')
+          APY=$(echo "$RESPONSE" | jq -r '.netApy // empty')
 
-          echo "DEBUG: TVL grezzo dall'API: $TVL"
+          echo "DEBUG: TVL = $TVL"
+          echo "DEBUG: APY = $APY"
 
+          # Componi il messaggio per Telegram
           if [[ "$TVL" == "error" || -z "$TVL" ]]; then
             MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
           else
-            MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD"
+            if [[ -n "$APY" && "$APY" != "null" ]]; then
+              MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD | APY: ${APY}%"
+            else
+              MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD"
+            fi
           fi
 
           echo "DEBUG: Messaggio finale: $MSG"
 
-          # Invia messaggio a Telegram usando gli stessi secrets del workflow APY
+          # Invia il messaggio Telegram usando i secrets già esistenti
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG"
+
+          # Salva i dati in un nuovo file storico
+          TIMESTAMP=$(date -u +"%Y-%m-%d_%H-%M-%S")
+          FILE="storico_${TIMESTAMP}.csv"
+          echo "tvl,apy,timestamp" > "$FILE"
+          echo "${TVL},${APY:-NA},${TIMESTAMP}" >> "$FILE"
+
+          # Commit del nuovo file senza rischio conflitti
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add "$FILE"
+          git commit -m "Aggiornamento storico automatico: $FILE" || echo "Nessun cambiamento"
+          git push origin main
