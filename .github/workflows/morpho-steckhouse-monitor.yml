@@ -2,56 +2,64 @@ name: Morpho TVL Telegram Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Ogni giorno alle 09:00 CEST (07:00 UTC)
+    - cron: '0 7 * * *'   # ogni giorno alle 09:00 CEST (07:00 UTC)
   workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Recupera TVL Morpho e manda Telegram
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl
+          sudo apt-get update && sudo apt-get install -y jq curl bc
 
-          echo "📡 Recupero TVL da Morpho Steakhouse USDT..."
+          echo "📡 Recupero dati da Morpho (GraphQL)..."
 
-          API_URL="https://blue-api.morpho.org/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
-          RESPONSE=$(curl -s "$API_URL")
+          # Vault Steakhouse USDT
+          VAULT="0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
 
-          TVL=$(echo "$RESPONSE" | jq -r '.totalAssetsUsd // "error"')
-          APY=$(echo "$RESPONSE" | jq -r '.netApy // empty')
+          RESPONSE=$(curl -s -X POST https://api.morpho.org/graphql \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { vaultByAddress(address: \"'$VAULT'\") { state { totalAssetsUsd rewards { apr } allocation { market { state { supplyApr } } } } } }"}')
 
+          TVL=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.totalAssetsUsd // "error"')
+
+          # Calcolo APY combinato (supplyApr + reward apr)
+          BASE_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.allocation.market.state.supplyApr')
+          REWARD_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.rewards[0].apr')
+
+          if [[ "$BASE_APR" == "null" || -z "$BASE_APR" ]]; then BASE_APR=0; fi
+          if [[ "$REWARD_APR" == "null" || -z "$REWARD_APR" ]]; then REWARD_APR=0; fi
+
+          APY=$(echo "$BASE_APR + $REWARD_APR" | bc -l)
+          APY_DISPLAY=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
+
+          # Messaggio per Telegram
           if [[ "$TVL" == "error" || -z "$TVL" ]]; then
             MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
           else
-            if [[ -n "$APY" && "$APY" != "null" ]]; then
-              MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD | APY: ${APY}%"
-            else
-              MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD"
-            fi
+            MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD | APY: ${APY_DISPLAY}%"
           fi
 
           echo "DEBUG: $MSG"
 
-          # Invia messaggio su Telegram usando i secrets già configurati
+          # Invia il messaggio a Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG"
 
-          # Crea un file CSV con nome unico per lo storico TVL
+          # Salva dati in un file CSV unico per ogni run
           TIMESTAMP=$(date -u +"%Y-%m-%d_%H-%M-%S")
           FILE="storicotvl_${TIMESTAMP}.csv"
           echo "tvl,apy,timestamp" > "$FILE"
-          echo "${TVL},${APY:-NA},${TIMESTAMP}" >> "$FILE"
+          echo "${TVL},${APY_DISPLAY},${TIMESTAMP}" >> "$FILE"
 
-          # Configura git (committa solo questo nuovo file)
+          # Commit solo dei file storicotvl_*.csv (non tocca history.csv)
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-
-          # Aggiungi solo i file 'storicotvl_*' senza mai includere altri file
-          git add "storicotvl_"* --intent-to-add
+          git add "storicotvl_"*
           git commit -m "Aggiornamento storico automatico: $FILE" || exit 0
           git push origin main
