@@ -2,7 +2,7 @@ name: Morpho TVL Telegram Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # ogni giorno alle 09:00 CEST (07:00 UTC)
+    - cron: '0 7 * * *'   # Ogni giorno alle 09:00 CEST (07:00 UTC)
   workflow_dispatch:
 
 jobs:
@@ -12,52 +12,45 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Recupera TVL Morpho e manda Telegram
+      - name: Recupera TVL da DefiLlama e manda Telegram
         run: |
           sudo apt-get update && sudo apt-get install -y jq curl bc
 
-          echo "📡 Recupero dati da Morpho (GraphQL)..."
+          echo "📡 Recupero dati da DefiLlama per vault Steakhouse..."
 
-          # Vault Steakhouse USDT
-          VAULT="0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
+          # Endpoint DefiLlama per il vault Steakhouse Morpho su Ethereum
+          API_URL="https://yields.llama.fi/chart/morpho-blue/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
 
-          RESPONSE=$(curl -s -X POST https://api.morpho.org/graphql \
-            -H "Content-Type: application/json" \
-            -d '{"query":"query { vaultByAddress(address: \"'$VAULT'\") { state { totalAssetsUsd rewards { apr } allocation { market { state { supplyApr } } } } } }"}')
+          RESPONSE=$(curl -s "$API_URL")
 
-          TVL=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.totalAssetsUsd // "error"')
+          # Prendi l'ultimo dato disponibile (fine dell'array)
+          TVL=$(echo "$RESPONSE" | jq -r '.data[-1].tvlUsd // "error"')
+          APY=$(echo "$RESPONSE" | jq -r '.data[-1].apy // 0')
 
-          # Calcolo APY combinato (supplyApr + reward apr)
-          BASE_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.allocation.market.state.supplyApr')
-          REWARD_APR=$(echo "$RESPONSE" | jq -r '.data.vaultByAddress.state.rewards[0].apr')
+          # Formatta APY
+          APY_DISPLAY=$(echo "$APY" | awk '{printf "%.2f", $0}')
 
-          if [[ "$BASE_APR" == "null" || -z "$BASE_APR" ]]; then BASE_APR=0; fi
-          if [[ "$REWARD_APR" == "null" || -z "$REWARD_APR" ]]; then REWARD_APR=0; fi
-
-          APY=$(echo "$BASE_APR + $REWARD_APR" | bc -l)
-          APY_DISPLAY=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
-
-          # Messaggio per Telegram
+          # Messaggio
           if [[ "$TVL" == "error" || -z "$TVL" ]]; then
             MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
           else
             MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD | APY: ${APY_DISPLAY}%"
           fi
 
-          echo "DEBUG: $MSG"
+          echo "$MSG"
 
           # Invia il messaggio a Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG"
 
-          # Salva dati in un file CSV unico per ogni run
+          # Salva i dati in un file CSV unico per questa esecuzione
           TIMESTAMP=$(date -u +"%Y-%m-%d_%H-%M-%S")
           FILE="storicotvl_${TIMESTAMP}.csv"
           echo "tvl,apy,timestamp" > "$FILE"
           echo "${TVL},${APY_DISPLAY},${TIMESTAMP}" >> "$FILE"
 
-          # Commit solo dei file storicotvl_*.csv (non tocca history.csv)
+          # Commit solo dei file storicotvl_*.csv (mai history.csv)
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add "storicotvl_"*
