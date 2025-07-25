@@ -2,7 +2,7 @@ name: Morpho TVL Telegram Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Ogni giorno alle 09:00 CEST (07:00 UTC)
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -18,41 +18,16 @@ jobs:
 
           echo "📡 Recupero dati da DefiLlama per vault Steakhouse..."
 
-          # Endpoint DefiLlama per il vault Steakhouse Morpho su Ethereum
-          API_URL="https://yields.llama.fi/chart/morpho-blue/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
+          # ID ufficiale del pool su DefiLlama (da URL)
+          POOL_ID="2bad58b8-13f6-41c6-9245-a9dc1ea85be9"
+          API_URL="https://yields.llama.fi/chart/${POOL_ID}"
 
           RESPONSE=$(curl -s "$API_URL")
 
-          # Prendi l'ultimo dato disponibile (fine dell'array)
+          # Prendi ultimo elemento dell'array (dato più recente)
           TVL=$(echo "$RESPONSE" | jq -r '.data[-1].tvlUsd // "error"')
           APY=$(echo "$RESPONSE" | jq -r '.data[-1].apy // 0')
 
-          # Formatta APY
           APY_DISPLAY=$(echo "$APY" | awk '{printf "%.2f", $0}')
 
-          # Messaggio
-          if [[ "$TVL" == "error" || -z "$TVL" ]]; then
-            MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
-          else
-            MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD | APY: ${APY_DISPLAY}%"
-          fi
-
-          echo "$MSG"
-
-          # Invia il messaggio a Telegram
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id=${{ secrets.CHAT_ID }} \
-            -d text="$MSG"
-
-          # Salva i dati in un file CSV unico per questa esecuzione
-          TIMESTAMP=$(date -u +"%Y-%m-%d_%H-%M-%S")
-          FILE="storicotvl_${TIMESTAMP}.csv"
-          echo "tvl,apy,timestamp" > "$FILE"
-          echo "${TVL},${APY_DISPLAY},${TIMESTAMP}" >> "$FILE"
-
-          # Commit solo dei file storicotvl_*.csv (mai history.csv)
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add "storicotvl_"*
-          git commit -m "Aggiornamento storico automatico: $FILE" || exit 0
-          git push origin main
+          if
