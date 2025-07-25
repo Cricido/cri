@@ -1,33 +1,37 @@
-name: Aggiornamento storico giornaliero
+name: Morpho TVL Telegram Alert
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"  # Esegui ogni giorno alle 01:00 UTC
+    - cron: '0 7 * * *'   # 9:00 CEST ogni giorno
+  workflow_dispatch:
 
 jobs:
-  push-storico:
+  notify:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout del repository
-        uses: actions/checkout@v3
-
-      - name: Configura Git
+      - name: Check TVL & Send Telegram
         run: |
-          git config user.name "bot"
-          git config user.email "bot@example.com"
+          # Installa jq
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Genera o aggiorna file (es. CSV)
-        run: |
-          echo "Esempio, dati, generati, $(date)" >> storico.csv
+          echo "📡 Recupero TVL da Morpho..."
 
-      - name: Commit e Push sicuro
-        run: |
-          git add .
-          git commit -m "Aggiornamento storico automatico" || echo "Nessun commit da fare"
+          # API Morpho Vault Steakhouse USDT (Ethereum)
+          API_URL="https://blue-api.morpho.org/vaults/0xbEef047a543E45807105E51A8BBEFCc5950fcfBa"
 
-          # Sincronizza con il remoto (evita l'errore 'fetch first')
-          git pull --rebase origin main || echo "Nessun cambiamento remoto da integrare"
+          TVL=$(curl -s "$API_URL" | jq -r '.totalAssetsUsd // "error"')
 
-          git push origin main
+          echo "DEBUG: TVL grezzo dall'API: $TVL"
+
+          if [[ "$TVL" == "error" || -z "$TVL" ]]; then
+            MSG="❌ ERRORE: impossibile recuperare il TVL del vault Steakhouse USDT."
+          else
+            MSG="📊 TVL Steakhouse USDT (Morpho Ethereum): ${TVL} USD"
+          fi
+
+          echo "DEBUG: Messaggio finale: $MSG"
+
+          # Invia messaggio a Telegram usando gli stessi secrets del workflow APY
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id=${{ secrets.CHAT_ID }} \
+            -d text="$MSG"
