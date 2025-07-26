@@ -2,14 +2,14 @@ name: Pendle Stable APY Alert
 
 on:
   schedule:
-    - cron: '0 8 * * *' # ogni giorno alle 10:00 italiane
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:
   alert:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Pendle Markets
+      - name: Check Pendle Stablecoin Markets
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
@@ -17,24 +17,20 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq curl
 
           echo "📡 Recupero mercati Pendle..."
+          DATA=$(curl -s "https://api-v2.pendle.finance/core/v2/markets")
 
-          DATA=$(curl -s "https://api.pendle.finance/core/v2/markets")
-
-          # Filtra mercati solo stable e con apy > 10
           RESULTS=$(echo "$DATA" | jq -r '
-            .data[] 
+            .data[]
             | select(.underlyingSymbol | test("USDC|USDT|DAI|USDe|sUSDe"))
             | select(.impliedApy > 0.10)
-            | "\(.chain) | \(.underlyingSymbol) | APY: \(.impliedApy * 100)% | Maturity: \(.maturityDate)"
+            | "• \(.chain): \(.underlyingSymbol) | APY: \((.impliedApy * 100) | floor)% | Maturity: \(.maturityDate)"
           ')
 
           if [ -z "$RESULTS" ]; then
-            MSG="Nessun nuovo mercato Pendle stablecoin con APY > 10%."
+            MSG="Nessun mercato stablecoin Pendle con APY > 10% trovato oggi."
           else
-            MSG="📊 Mercati Pendle stable con APY > 10%:\n$RESULTS"
+            MSG="📊 Mercati Pendle stablecoin con APY > 10%:\n$RESULTS"
           fi
-
-          echo "$MSG"
 
           curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
