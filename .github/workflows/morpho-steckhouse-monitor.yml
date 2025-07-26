@@ -27,7 +27,7 @@ jobs:
           echo "TVL corrente: $TVL USD"
 
           # Soglia in USD; 65000000 = 65 milioni
-          THRESHOLD=65000000
+          THRESHOLD=65,000000
 
           # Confronta la TVL con la soglia; se inferiore, genera alert
           if echo "$TVL $THRESHOLD" | awk '{exit !($1 < $2)}'; then
