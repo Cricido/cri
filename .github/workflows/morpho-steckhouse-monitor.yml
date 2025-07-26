@@ -1,33 +1,43 @@
-name: Morpho TVL Telegram Alert
+name: Beefy TVL Alert
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 8 * * *'    # 08:00 UTC = 10:00 italiane
   workflow_dispatch:
 
 jobs:
-  notify:
+  alert:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Recupera TVL da DefiLlama e manda Telegram
+      - name: Check Beefy Stargate V2 ARB USDT TVL
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl bc
+          sudo apt-get update && sudo apt-get install -y jq curl
 
-          echo "📡 Recupero dati da DefiLlama per vault Steakhouse..."
+          echo "🔍 Recupero TVL di stargate-v2-arb-usdt…"
 
-          # ID ufficiale del pool su DefiLlama (da URL)
-          POOL_ID="2bad58b8-13f6-41c6-9245-a9dc1ea85be9"
-          API_URL="https://yields.llama.fi/chart/${POOL_ID}"
+          # Ottieni la mappa delle TVL da Beefy
+          DATA=$(curl -s https://api.beefy.finance/tvl)
 
-          RESPONSE=$(curl -s "$API_URL")
+          # Estrai la TVL del vault stargate-v2-arb-usdt (ricerca ricorsiva)
+          TVL=$(echo "$DATA" | jq -r '.. | .["stargate-v2-arb-usdt"]? // empty')
 
-          # Prendi ultimo elemento dell'array (dato più recente)
-          TVL=$(echo "$RESPONSE" | jq -r '.data[-1].tvlUsd // "error"')
-          APY=$(echo "$RESPONSE" | jq -r '.data[-1].apy // 0')
+          echo "TVL corrente: $TVL USD"
 
-          APY_DISPLAY=$(echo "$APY" | awk '{printf "%.2f", $0}')
+          # Soglia in USD; 65000000 = 65 milioni
+          THRESHOLD=65000000
 
-          if
+          # Confronta la TVL con la soglia; se inferiore, genera alert
+          if echo "$TVL $THRESHOLD" | awk '{exit !($1 < $2)}'; then
+            MSG="⚠️ TVL sotto soglia: la TVL di *stargate-v2-arb-usdt* è scesa a \$${TVL}, inferiore a \$${THRESHOLD}."
+          else
+            MSG="✅ TVL nella norma: la TVL di *stargate-v2-arb-usdt* è \$${TVL}."
+          fi
+
+          # Invia il messaggio su Telegram
+          curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="$MSG" \
+            -d parse_mode="Markdown"
