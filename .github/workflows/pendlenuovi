@@ -2,8 +2,8 @@ name: Pendle Stable APY Alert
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # tutti i giorni alle 10:00 italiane
-  workflow_dispatch:       # abilita il pulsante "Run workflow"
+    - cron: '0 8 * * *'   # 08:00 UTC = 10:00 italiane in estate
+  workflow_dispatch:
 
 jobs:
   alert:
@@ -17,23 +17,31 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq curl
 
           echo "📡 Recupero mercati Pendle..."
-          DATA=$(curl -s "https://api-v2.pendle.finance/core/v2/markets")
 
-          # Filtra mercati stablecoin e APY > 10%
-          RESULTS=$(echo "$DATA" | jq -r '
-            .data[]
-            | select(.underlyingSymbol | test("USDC|USDT|DAI|USDe|sUSDe"))
-            | select(.impliedApy > 0.10)
-            | "• \(.chain): \(.underlyingSymbol) | APY: \((.impliedApy * 100) | floor)% | Maturity: \(.maturityDate)"
-          ')
+          # elenco delle chain da interrogare: 1=Ethereum, 42161=Arbitrum, 137=Polygon, 56=BNB, 10=Optimism, 43114=Avalanche
+          CHAINS=(1 42161 137 56 10 43114)
+          RESULTS=""
+
+          for CHAIN in "${CHAINS[@]}"; do
+            DATA=$(curl -s "https://api-v2.pendle.finance/core/v1/${CHAIN}/markets/active")
+            FILTERED=$(echo "$DATA" | jq -r --arg chain "$CHAIN" '
+              .markets[]
+              | select(.name | test("USDC|USDT|DAI|USDe|sUSDe"))
+              | select(.details.impliedApy > 0.10)
+              | "• chain " + $chain + ": " + .name + " | APY: \((.details.impliedApy * 100) | floor)% | Maturity: " + .expiry
+            ')
+            if [ -n "$FILTERED" ]; then
+              RESULTS+="$FILTERED\n"
+            fi
+          done
 
           if [ -z "$RESULTS" ]; then
             MSG="Nessun mercato stablecoin Pendle con APY > 10% trovato oggi."
           else
-            MSG="📊 Mercati Pendle stablecoin con APY > 10%:\n$RESULTS"
+            MSG="📊 Mercati Pendle stablecoin con APY > 10%:\n${RESULTS}"
           fi
 
-          # Invia messaggio su Telegram
+          # invia messaggio su Telegram
           curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d text="$MSG" \
