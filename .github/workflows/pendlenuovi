@@ -1,47 +1,42 @@
-name: Pendle Stable APY Alert
+name: Beefy TVL Alert
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # 08:00 UTC = 10:00 italiane in estate
+    - cron: '0 8 * * *'    # 08:00 UTC = 10:00 italiane
   workflow_dispatch:
 
 jobs:
   alert:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Pendle Stablecoin Markets
+      - name: Check Beefy Stargate V2 ARB USDT TVL
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           sudo apt-get update && sudo apt-get install -y jq curl
 
-          echo "📡 Recupero mercati Pendle..."
+          echo "🔍 Recupero TVL di stargate-v2-arb-usdt…"
 
-          # elenco delle chain da interrogare: 1=Ethereum, 42161=Arbitrum, 137=Polygon, 56=BNB, 10=Optimism, 43114=Avalanche
-          CHAINS=(1 42161 137 56 10 43114)
-          RESULTS=""
+          # Ottieni la mappa delle TVL da Beefy
+          DATA=$(curl -s https://api.beefy.finance/tvl)
 
-          for CHAIN in "${CHAINS[@]}"; do
-            DATA=$(curl -s "https://api-v2.pendle.finance/core/v1/${CHAIN}/markets/active")
-            FILTERED=$(echo "$DATA" | jq -r --arg chain "$CHAIN" '
-              .markets[]
-              | select(.name | test("USDC|USDT|DAI|USDe|sUSDe"))
-              | select(.details.impliedApy > 0.10)
-              | "• chain " + $chain + ": " + .name + " | APY: \((.details.impliedApy * 100) | floor)% | Maturity: " + .expiry
-            ')
-            if [ -n "$FILTERED" ]; then
-              RESULTS+="$FILTERED\n"
-            fi
-          done
+          # Estrai la TVL del vault stargate-v2-arb-usdt (ricerca ricorsiva)
+          TVL=$(echo "$DATA" | jq -r '.. | .["stargate-v2-arb-usdt"]? // empty')
 
-          if [ -z "$RESULTS" ]; then
-            MSG="Nessun mercato stablecoin Pendle con APY > 10% trovato oggi."
+          echo "TVL corrente: $TVL USD"
+
+          # Soglia in USD; 65000000 = 65 milioni
+          THRESHOLD=65000000
+
+          # Confronta la TVL con la soglia; se inferiore, genera alert
+          if echo "$TVL $THRESHOLD" | awk '{exit !($1 < $2)}'; then
+            MSG="⚠️ TVL sotto soglia: la TVL di *stargate-v2-arb-usdt* è scesa a \$${TVL}, inferiore a \$${THRESHOLD}."
           else
-            MSG="📊 Mercati Pendle stablecoin con APY > 10%:\n${RESULTS}"
+            MSG="✅ TVL nella norma: la TVL di *stargate-v2-arb-usdt* è \$${TVL}."
           fi
 
-          # invia messaggio su Telegram
+          # Invia il messaggio su Telegram
           curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d text="$MSG" \
