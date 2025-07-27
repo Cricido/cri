@@ -2,9 +2,9 @@ name: Morpho Steakhouse Monitor
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # 8 AM UTC
-    - cron: '0 14 * * *'  # 2 PM UTC
-    - cron: '0 20 * * *'  # 8 PM UTC
+    - cron: '0 8 * * *'   # 8:00 UTC
+    - cron: '0 14 * * *'  # 14:00 UTC
+    - cron: '0 20 * * *'  # 20:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -16,21 +16,21 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          SOGLIA_PEG: 0.995      # Configurable PEG threshold
-          SOGLIA_APY: 4.0        # Configurable APY threshold
-          SOGLIA_TVL: 1000000000 # Configurable TVL threshold ($1B)
+          SOGLIA_PEG: 0.995      # Soglia PEG USDT
+          SOGLIA_APY: 4.0        # Soglia APY
+          SOGLIA_TVL: 1000000000 # Soglia TVL (es. 1B USD)
         run: |
           set -e
-          sudo apt-get install -y jq bc curl  # Install deps (update not needed)
+          sudo apt-get install -y jq bc curl  # Installa dipendenze
 
-          # Function to fetch with retry
+          # Funzione per fetch con ritentativi
           fetch_with_retry() {
             for i in {1..3}; do
               RESULT=$(curl -s --max-time 10 "$1") && [[ -n "$RESULT" ]] && echo "$RESULT" && return
-              echo "Retry $i/3 for $1..." >&2
+              echo "Ritentativo $i/3 per $1..." >&2
               sleep 2
             done
-            echo "Failed to fetch $1" >&2
+            echo "Errore: Impossibile fetch $1" >&2
             exit 1
           }
 
@@ -40,15 +40,15 @@ jobs:
           echo "PEG USDT: $PEG"
 
           echo "=== Controllo TVL Morpho ==="
-          TVL=$(fetch_with_retry "https://api.llama.fi/tvl/morpho-blue")
-          # Format TVL nicely (e.g., 3227019065 -> 3.23B)
+          TVL=$(fetch_with_retry "https://api.llama.fi/tvl/morpho-blue")  # Solo TVL attuale!
+          # Formatta TVL (es. 5872816174 -> 5.87B)
           TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
           echo "TVL Morpho: $TVL_FORMATTED USD (raw: $TVL)"
 
           echo "=== Controllo APY Morpho ==="
           PROTOCOL_DATA=$(fetch_with_retry "https://api.llama.fi/protocol/morpho-blue")
-          # Extract average APY (adjust jq path if needed; this assumes chain data has APY)
-          APY=$(echo "$PROTOCOL_DATA" | jq -r '.chainTvls | to_entries | map(.value.apy) | add / length // 0')
+          # Estrae APY medio (adatta se hai una fonte migliore)
+          APY=$(echo "$PROTOCOL_DATA" | jq -r '.chainTvls | to_entries | map(.value.apy // 0) | add / length // 0')
           echo "APY Morpho: $APY%"
 
           ALERTS=""
@@ -70,7 +70,7 @@ jobs:
             MSG="✅ Tutto OK%0A${REPORT}"
           fi
 
-          # Truncate if too long (unlikely now, but safety net)
+          # Troncamento di sicurezza (max 4000 char)
           MSG=$(echo "$MSG" | cut -c1-4000)
 
           echo "=== Invio messaggio Telegram ==="
@@ -79,7 +79,7 @@ jobs:
             -d text="$MSG" \
             -d parse_mode="Markdown")
           if [[ $RESPONSE != *'"ok":true'* ]]; then
-            echo "Telegram send failed: $RESPONSE" >&2
+            echo "Errore invio Telegram: $RESPONSE" >&2
             exit 1
           fi
-          echo "Message sent successfully!"
+          echo "Messaggio inviato con successo!"
