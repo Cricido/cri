@@ -42,45 +42,46 @@ jobs:
 
           echo "=== Controllo TVL e APY Steakhouse USDT su Ethereum (Morpho) ==="
           MORPHO_DATA=$(fetch_with_retry "https://api.morpho.org/api/v1/vaults/all?chainId=1")  # API Morpho per Ethereum
-          echo "Debug: Risposta API Morpho (primi 200 char): ${MORPHO_DATA:0:200}"  # Debug: Mostra inizio risposta API
+          echo "Debug: Risposta API Morpho (primi 200 char): ${MORPHO_DATA:0:200}"  # Debug
+          echo "Debug: Numero di vault in API: $(echo "$MORPHO_DATA" | jq 'if type == "array" then length else (.vaults // []) | length end')"  # Debug: Conta vault
 
-          # Gestione robusta: Se è un oggetto wrapped, usa .vaults[]; altrimenti .[]
+          # Estrae info vault
           VAULT_INFO=$(echo "$MORPHO_DATA" | jq --arg addr "$VAULT_ADDRESS" '
             (if type == "array" then .[] else (.vaults // [])[] end) |
             select((.address // "" | ascii_downcase) == $addr)')
-          echo "Debug: VAULT_INFO = $VAULT_INFO"  # Debug: Mostra info estratte
+          echo "Debug: VAULT_INFO = $VAULT_INFO"  # Debug
 
           if [ -z "$VAULT_INFO" ] || [ "$VAULT_INFO" = "null" ]; then
-            echo "Vault non trovato o dati non disponibili."
-            TVL="N/A"
-            TVL_FORMATTED="N/A"
-            APY="N/A"
-            ALERTS="${ALERTS}⚠️ Vault Steakhouse USDT non trovato nell'API!%0A"
+            echo "Vault non trovato - uso fallback DefiLlama per Morpho su Ethereum."
+            ALERTS="${ALERTS}⚠️ Vault Steakhouse USDT non trovato nell'API Morpho - usando dati generali!%0A"
+
+            # Fallback: TVL generale Morpho su Ethereum da DefiLlama
+            PROTOCOL_DATA=$(fetch_with_retry "https://api.llama.fi/protocol/morpho-blue")
+            TVL=$(echo "$PROTOCOL_DATA" | jq -r '.chainTvls.Ethereum.tvl[-1].totalLiquidityUSD // 0')
+            TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
+            echo "Fallback TVL: $TVL_FORMATTED USD (raw: $TVL)"
+
+            # Fallback: APY medio da DefiLlama Yields per Morpho su Ethereum, USDT
+            YIELDS_DATA=$(fetch_with_retry "https://yields.llama.fi/pools")
+            APY=$(echo "$YIELDS_DATA" | jq -r '[.data[] | select(.chain == "Ethereum" and .project == "morpho-blue" and (.symbol | test("USDT"; "i"))) | .apy // 0] | if length > 0 then (add / length | round / 100.0) else "N/A" end')
+            echo "Fallback APY: $APY%"
           else
-            # TVL: totalAssets / 10^6 (decimali USDT), in USD
-            TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // "0"')  # Default a "0" se null
-            echo "Debug: TVL_RAW = $TVL_RAW"  # Debug: Mostra valore raw
-            if [ "$TVL_RAW" = "0" ] || [ -z "$TVL_RAW" ]; then
-              TVL="N/A"
-              TVL_FORMATTED="N/A"
-            else
-              TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc -l)  # Converti da wei-like a USD
-              TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
-            fi
+            # TVL specifico
+            TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // "0"')
+            echo "Debug: TVL_RAW = $TVL_RAW"
+            TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc -l)
+            TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
             echo "TVL: $TVL_FORMATTED USD (raw: $TVL)"
 
-            # APY: supplyApy / 1e27 * 100, arrotondato a 2 decimali
-            APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // "0"')  # Default a "0" se null
-            echo "Debug: APY_RAW = $APY_RAW"  # Debug: Mostra valore raw
-            if [ "$APY_RAW" = "0" ] || [ -z "$APY_RAW" ]; then
-              APY="N/A"
-            else
-              APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc -l)
-            fi
+            # APY specifico
+            APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // "0"')
+            echo "Debug: APY_RAW = $APY_RAW"
+            APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc -l)
+            if [ "$APY" = "0.00" ]; then APY="N/A"; fi
             echo "APY: $APY%"
           fi
 
-          ALERTS=""
+          # Alert logic (skip if N/A)
           if (( $(echo "$PEG < $SOGLIA_PEG" | bc -l) )); then
             ALERTS="${ALERTS}⚠️ PEG USDT sotto $SOGLIA_PEG (attuale: $PEG)%0A"
           fi
@@ -99,7 +100,7 @@ jobs:
             MSG="✅ Tutto OK%0A${REPORT}"
           fi
 
-          # Troncamento di sicurezza (max 4000 char)
+          # Troncamento di sicurezza
           MSG=$(echo "$MSG" | cut -c1-4000)
 
           echo "=== Invio messaggio Telegram ==="
