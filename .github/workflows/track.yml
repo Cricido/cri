@@ -1,27 +1,66 @@
-name: Portfolio Tracker
+import requests
+import csv
+import datetime
+import os
+import subprocess
 
-on:
-  schedule:
-    - cron: "0 6 * * *"  # ogni giorno alle 6 UTC
-  workflow_dispatch:
+# CONFIG
+ADDRESS = "0x6bD872Ef0749eBa102A9e7Cd9FC24Ed2A5C88679"
+DEBANK_API = f"https://pro-openapi.debank.com/v1/user/total_balance?id={ADDRESS}"
+CSV_FILE = "portfolio.csv"
+CEFI_FILE = "cefi_manual.txt"
+MORPHO_THRESHOLD = 0.60  # 60%
 
-jobs:
-  run-tracker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-      - name: Install deps
-        run: pip install requests
-      - name: Run script
-        run: python portfolio_tracker.py
-      - name: Commit changes
-        run: |
-          git config --global user.email "bot@example.com"
-          git config --global user.name "PortfolioBot"
-          git add portfolio.csv
-          git commit -m "Update portfolio data" || echo "No changes"
-          git push
+# 1. Legge CeFi manuale
+try:
+    with open(CEFI_FILE) as f:
+        nexo_balance = float(f.read().strip())
+except FileNotFoundError:
+    nexo_balance = 0.0
+
+# 2. Richiesta API DeBank
+headers = {"accept": "application/json"}
+resp = requests.get(DEBANK_API, headers=headers)
+data = resp.json()
+
+# 3. Valore totale DeFi
+total_defi = data.get("total_usd_value", 0)
+total = total_defi + nexo_balance
+
+# 4. Breakdown protocolli principali
+morpho_val = beefy_val = pendle_val = 0
+
+for chain in data.get("chain_list", []):
+    for prot in chain.get("portfolio_list", []):
+        pname = prot.get("name", "").lower()
+        usd_val = prot.get("usd_value", 0)
+        if "morpho" in pname or "steakhouse" in pname:
+            morpho_val += usd_val
+        if "beefy" in pname:
+            beefy_val += usd_val
+        if "pendle" in pname:
+            pendle_val += usd_val
+
+date = datetime.date.today()
+
+# 5. Salva nel CSV
+file_exists = os.path.isfile(CSV_FILE)
+with open(CSV_FILE, "a", newline="") as f:
+    writer = csv.writer(f)
+    if not file_exists:
+        writer.writerow(["date","total","morpho","beefy","pendle","nexo"])
+    writer.writerow([date, total, morpho_val, beefy_val, pendle_val, nexo_balance])
+
+# 6. Controllo esposizione
+if morpho_val / total > MORPHO_THRESHOLD:
+    print(f"ALERT: Morpho supera il {MORPHO_THRESHOLD*100}% del portafoglio!")
+else:
+    print("Portafoglio OK")
+
+# 7. Se gira su GitHub Actions, commit automatico
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    subprocess.run(["git", "config", "--global", "user.email", "bot@example.com"])
+    subprocess.run(["git", "config", "--global", "user.name", "PortfolioBot"])
+    subprocess.run(["git", "add", CSV_FILE])
+    subprocess.run(["git", "commit", "-m", "Update portfolio data"], check=False)
+    subprocess.run(["git", "push"])
