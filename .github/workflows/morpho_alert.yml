@@ -2,52 +2,96 @@ name: Morpho Steakhouse Monitor
 
 on:
   schedule:
-    # Orari UTC: 08:00, 14:00 e 20:00
-    - cron: '0 8 * * *'
-    - cron: '0 14 * * *'
-    - cron: '0 20 * * *'
+    - cron: '0 8 * * *'   # 8:00 UTC
+    - cron: '0 14 * * *'  # 14:00 UTC
+    - cron: '0 20 * * *'  # 20:00 UTC
   workflow_dispatch:
 
 jobs:
-  monitor:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Monitor Morpho Steakhouse and send Telegram alert
+      - name: Monitor Morpho and send Telegram alert
         shell: bash
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          SOGLIA_PEG: 0.995      # Soglia PEG USDT
+          SOGLIA_APY: 4.0        # Soglia APY
+          SOGLIA_TVL: 1000000000 # Soglia TVL (es. 1B USD)
+          VAULT_ADDRESS: "0xbeef047a543e45807105e51a8bbefc5950fcfba"  # Indirizzo lowercase del vault Steakhouse USDT
         run: |
           set -e
-          sudo apt-get update -qq && sudo apt-get install -y jq bc curl
+          sudo apt-get install -y jq bc curl  # Installa dipendenze
+
+          # Funzione per fetch con ritentativi
+          fetch_with_retry() {
+            for i in {1..3}; do
+              RESULT=$(curl -s --max-time 10 "$1") && [[ -n "$RESULT" ]] && echo "$RESULT" && return
+              echo "Ritentativo $i/3 per $1..." >&2
+              sleep 2
+            done
+            echo "Errore: Impossibile fetch $1" >&2
+            exit 1
+          }
 
           echo "=== Controllo PEG USDT ==="
-          PEG=$(curl -s "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd" | jq -r '.tether.usd')
+          PEG_DATA=$(fetch_with_retry "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd")
+          PEG=$(echo "$PEG_DATA" | jq -r '.tether.usd // 0')
           echo "PEG USDT: $PEG"
 
-          echo "=== Controllo TVL Steakhouse (Morpho) ==="
-          # Query GraphQL a Morpho (usando l'indirizzo checksum corretto)
-          TVL=$(curl -s 'https://blue-api.morpho.org/graphql' \
-            -H 'Content-Type: application/json' \
-            --data '{"query":"{ vault(id:\"0xbEef047a543E45807105E51A8BBEFCc5950fcfBa\") { totalSupplyAssets } }"}' \
-            | jq -r '.data.vault.totalSupplyAssets')
+          echo "=== Controllo TVL e APY Steakhouse USDT su Ethereum (Morpho) ==="
+          MORPHO_DATA=$(fetch_with_retry "https://api.morpho.org/api/v1/vaults/all?chainId=1")  # API Morpho per Ethereum
+          echo "Debug: Risposta API Morpho (primi 200 char): ${MORPHO_DATA:0:200}"  # Debug: Mostra inizio risposta API
 
-          echo "TVL Steakhouse (USDT): $TVL"
+          # Gestione robusta: Se è un oggetto wrapped, usa .vaults[]; altrimenti .[]
+          VAULT_INFO=$(echo "$MORPHO_DATA" | jq --arg addr "$VAULT_ADDRESS" '
+            (if type == "array" then .[] else (.vaults // [])[] end) |
+            select((.address // "" | ascii_downcase) == $addr)')
+          echo "Debug: VAULT_INFO = $VAULT_INFO"  # Debug: Mostra info estratte
 
-          # APY atteso per controllare soglia
-          SOGLIA_APY=4.0
-          APY=5.2  # aggiorna se hai una fonte automatica
+          if [ -z "$VAULT_INFO" ] || [ "$VAULT_INFO" = "null" ]; then
+            echo "Vault non trovato o dati non disponibili."
+            TVL="N/A"
+            TVL_FORMATTED="N/A"
+            APY="N/A"
+            ALERTS="${ALERTS}⚠️ Vault Steakhouse USDT non trovato nell'API!%0A"
+          else
+            # TVL: totalAssets / 10^6 (decimali USDT), in USD
+            TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // "0"')  # Default a "0" se null
+            echo "Debug: TVL_RAW = $TVL_RAW"  # Debug: Mostra valore raw
+            if [ "$TVL_RAW" = "0" ] || [ -z "$TVL_RAW" ]; then
+              TVL="N/A"
+              TVL_FORMATTED="N/A"
+            else
+              TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc -l)  # Converti da wei-like a USD
+              TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
+            fi
+            echo "TVL: $TVL_FORMATTED USD (raw: $TVL)"
+
+            # APY: supplyApy / 1e27 * 100, arrotondato a 2 decimali
+            APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // "0"')  # Default a "0" se null
+            echo "Debug: APY_RAW = $APY_RAW"  # Debug: Mostra valore raw
+            if [ "$APY_RAW" = "0" ] || [ -z "$APY_RAW" ]; then
+              APY="N/A"
+            else
+              APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc -l)
+            fi
+            echo "APY: $APY%"
+          fi
 
           ALERTS=""
-          if (( $(echo "$PEG < 0.995" | bc -l) )); then
-            ALERTS="${ALERTS}⚠️ PEG USDT sotto 0.995 (attuale: $PEG)%0A"
+          if (( $(echo "$PEG < $SOGLIA_PEG" | bc -l) )); then
+            ALERTS="${ALERTS}⚠️ PEG USDT sotto $SOGLIA_PEG (attuale: $PEG)%0A"
+          fi
+          if [ "$APY" != "N/A" ] && (( $(echo "$APY < $SOGLIA_APY" | bc -l) )); then
+            ALERTS="${ALERTS}⚠️ APY sceso a $APY%% (soglia: $SOGLIA_APY%%)%0A"
+          fi
+          if [ "$TVL" != "N/A" ] && (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
+            ALERTS="${ALERTS}⚠️ TVL sotto $SOGLIA_TVL USD (attuale: $TVL_FORMATTED)%0A"
           fi
 
-          if (( $(echo "$APY < $SOGLIA_APY" | bc -l) )); then
-            ALERTS="${ALERTS}⚠️ APY Morpho sceso a $APY%0A"
-          fi
-
-          REPORT="Monitoraggio Morpho/Steakhouse%0AUSDT PEG: $PEG%0ATVL Steakhouse (USDT): $TVL%0AAPY Morpho: ${APY}%%"
+          REPORT="Monitoraggio Steakhouse USDT su Ethereum (Morpho)%0AUSDT PEG: $PEG%0ATVL: $TVL_FORMATTED USD%0AAPY: ${APY}%%"
 
           if [ -n "$ALERTS" ]; then
             MSG="⚠️ ALLERTA%0A${ALERTS}%0A${REPORT}"
@@ -55,8 +99,16 @@ jobs:
             MSG="✅ Tutto OK%0A${REPORT}"
           fi
 
+          # Troncamento di sicurezza (max 4000 char)
+          MSG=$(echo "$MSG" | cut -c1-4000)
+
           echo "=== Invio messaggio Telegram ==="
-          curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+          RESPONSE=$(curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d text="$MSG" \
-            -d parse_mode="Markdown"
+            -d parse_mode="Markdown")
+          if [[ $RESPONSE != *'"ok":true'* ]]; then
+            echo "Errore invio Telegram: $RESPONSE" >&2
+            exit 1
+          fi
+          echo "Messaggio inviato con successo!"
