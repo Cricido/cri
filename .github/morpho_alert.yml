@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check Morpho & Send Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           sudo apt-get update && sudo apt-get install -y jq bc curl
 
@@ -29,9 +32,8 @@ jobs:
           echo "TVL Morpho: $TVL"
           MSG="${MSG}TVL Morpho: $TVL USD%0A"
 
-          # Se vuoi anche un controllo APY puoi inserire manualmente una soglia
           SOGLIA_APY=4.0
-          APY=5.2  # valore stimato, o puoi recuperarlo da un API personalizzata
+          APY=5.2
           if (( $(echo "$APY < $SOGLIA_APY" | bc -l) )); then
             MSG="${MSG}⚠️ APY Morpho sceso a ${APY}%0A"
           else
@@ -45,7 +47,7 @@ jobs:
           fi
 
           echo "Invio messaggio Telegram..."
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id=${{ secrets.CHAT_ID }} \
+          curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
             -d text="$MSG" \
             -d parse_mode="Markdown"
