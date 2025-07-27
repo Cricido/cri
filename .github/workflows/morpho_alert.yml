@@ -2,7 +2,6 @@ name: Morpho Steakhouse Monitor
 
 on:
   schedule:
-    # 08:00, 14:00 e 20:00 UTC
     - cron: '0 8 * * *'
     - cron: '0 14 * * *'
     - cron: '0 20 * * *'
@@ -29,11 +28,9 @@ jobs:
           TVL=$(curl -s "https://api.llama.fi/protocol/morpho-blue" | jq -r '.tvl')
           echo "TVL Morpho: $TVL"
 
-          # Qui puoi cambiare la soglia e l'APY atteso
           SOGLIA_APY=4.0
           APY=5.2
 
-          # Costruzione messaggio di alert
           ALERTS=""
           if (( $(echo "$PEG < 0.995" | bc -l) )); then
             ALERTS="${ALERTS}⚠️ PEG USDT sotto 0.995 (attuale: $PEG)%0A"
@@ -45,7 +42,7 @@ jobs:
           REPORT="Monitoraggio Morpho/Steakhouse%0A\
 USDT PEG: $PEG%0A\
 TVL Morpho: $TVL USD%0A\
-APY Morpho: $APY%"
+APY Morpho: ${APY}%%"
 
           if [ -n "$ALERTS" ]; then
             MSG="⚠️ ALLERTA%0A${ALERTS}%0A${REPORT}"
