@@ -43,22 +43,31 @@ jobs:
           echo "=== Controllo TVL e APY Steakhouse USDT su Ethereum (Morpho) ==="
           MORPHO_DATA=$(fetch_with_retry "https://api.morpho.org/api/v1/vaults/all?chainId=1")  # API Morpho per Ethereum
 
-          # Estrae dati per il vault specifico
-          VAULT_INFO=$(echo "$MORPHO_DATA" | jq --arg addr "$VAULT_ADDRESS" '.[] | select(.address | ascii_downcase == $addr)')
+          # Gestione robusta: Se è un oggetto wrapped, usa .vaults[]; altrimenti .[]
+          VAULT_INFO=$(echo "$MORPHO_DATA" | jq --arg addr "$VAULT_ADDRESS" '
+            (if type == "array" then .[] else .vaults[] // empty end) |
+            select((.address // "" | ascii_downcase) == $addr)')
 
-          # TVL: totalAssets / 10^6 (decimali USDT), in USD
-          TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // 0')
-          TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc)  # Converti da wei-like a USD
-          TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
-          echo "TVL: $TVL_FORMATTED USD (raw: $TVL)"
+          if [ -z "$VAULT_INFO" ] || [ "$VAULT_INFO" = "null" ]; then
+            echo "Vault non trovato o dati non disponibili."
+            TVL="N/A"
+            TVL_FORMATTED="N/A"
+            APY="N/A"
+          else
+            # TVL: totalAssets / 10^6 (decimali USDT), in USD
+            TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // 0')
+            TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc)  # Converti da wei-like a USD
+            TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
+            echo "TVL: $TVL_FORMATTED USD (raw: $TVL)"
 
-          # APY: supplyApy / 1e27 * 100, arrotondato a 2 decimali
-          APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // 0')
-          APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc)
-          if [ "$APY" = "0" ] || [ "$APY" = "0.00" ]; then
-            APY="N/A"  # Fallback se non ci sono dati
+            # APY: supplyApy / 1e27 * 100, arrotondato a 2 decimali
+            APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // 0')
+            APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc)
+            if [ "$APY" = "0" ] || [ "$APY" = "0.00" ]; then
+              APY="N/A"  # Fallback se non ci sono dati
+            fi
+            echo "APY: $APY%"
           fi
-          echo "APY: $APY%"
 
           ALERTS=""
           if (( $(echo "$PEG < $SOGLIA_PEG" | bc -l) )); then
@@ -67,7 +76,7 @@ jobs:
           if [ "$APY" != "N/A" ] && (( $(echo "$APY < $SOGLIA_APY" | bc -l) )); then
             ALERTS="${ALERTS}⚠️ APY sceso a $APY%% (soglia: $SOGLIA_APY%%)%0A"
           fi
-          if (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
+          if [ "$TVL" != "N/A" ] && (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
             ALERTS="${ALERTS}⚠️ TVL sotto $SOGLIA_TVL USD (attuale: $TVL_FORMATTED)%0A"
           fi
 
