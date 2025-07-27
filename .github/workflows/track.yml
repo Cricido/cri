@@ -1,0 +1,27 @@
+name: Portfolio Tracker
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # ogni giorno alle 6 UTC
+  workflow_dispatch:
+
+jobs:
+  run-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      - name: Install deps
+        run: pip install requests
+      - name: Run script
+        run: python portfolio_tracker.py
+      - name: Commit changes
+        run: |
+          git config --global user.email "bot@example.com"
+          git config --global user.name "PortfolioBot"
+          git add portfolio.csv
+          git commit -m "Update portfolio data" || echo "No changes"
+          git push
