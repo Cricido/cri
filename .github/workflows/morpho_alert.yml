@@ -39,10 +39,7 @@ jobs:
             ALERTS="${ALERTS}⚠️ APY Morpho sceso a $APY%0A"
           fi
 
-          REPORT="Monitoraggio Morpho/Steakhouse%0A\
-USDT PEG: $PEG%0A\
-TVL Morpho: $TVL USD%0A\
-APY Morpho: ${APY}%%"
+          REPORT="Monitoraggio Morpho/Steakhouse%0AUSDT PEG: $PEG%0ATVL Morpho: $TVL USD%0AAPY Morpho: ${APY}%%"
 
           if [ -n "$ALERTS" ]; then
             MSG="⚠️ ALLERTA%0A${ALERTS}%0A${REPORT}"
