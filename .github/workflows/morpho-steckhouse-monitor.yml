@@ -68,9 +68,11 @@ jobs:
               ALERT+="⚠️ **ALERT APY**: Net APY sotto 4% (possibile instabilità o problema nel vault)!\n"
             fi
 
-            # Se c'è alert, aggiungilo al messaggio
+            # Aggiungi status "Tutto OK" o "Rischio Alto" basato su alert
             if [[ ! -z "$ALERT" ]]; then
-              MSG="${MSG}\n\n${ALERT}🚨 **Azione consigliata**: Indaga su Morpho/Discord e considera withdraw."
+              MSG="${MSG}\n\n${ALERT}❌ **Stato: Rischio Alto** 🚨\n**Azione consigliata**: Indaga su Morpho/Discord e considera withdraw."
+            else
+              MSG="${MSG}\n\n✅ **Stato: Tutto OK**"
             fi
           fi
 
