@@ -19,16 +19,14 @@ jobs:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python << 'EOF'
+          python <<'EOF'
           import requests, os, sys, json
 
           BOT_TOKEN = os.environ['BOT_TOKEN']
           CHAT_ID = os.environ['CHAT_ID']
 
-          # ID del vault Steakhouse USDT su Ethereum
           vault_id = "0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
 
-          # Query GraphQL aggiornata
           query = f"""
           query {{
             vault(id: "{vault_id}") {{
@@ -43,7 +41,6 @@ jobs:
           }}
           """
 
-          # Chiamata all'API GraphQL di Morpho
           r = requests.post(
               "https://api.morpho.org/graphql",
               json={"query": query},
@@ -56,7 +53,6 @@ jobs:
               print("Risposta non JSON:", r.text)
               sys.exit(1)
 
-          # Controllo errori GraphQL
           if "errors" in resp:
               print("Errore GraphQL:", json.dumps(resp["errors"], indent=2))
               sys.exit(1)
@@ -68,13 +64,11 @@ jobs:
 
           snap = vault["latestSnapshot"]
 
-          # Conversione dati
           apy = float(snap["apy"]) * 100
           apy_base = float(snap.get("apyBase", 0)) * 100
           apy_reward = float(snap.get("apyReward", 0)) * 100
-          tvl = float(snap["tvl"]) / 1e6  # milioni di USDT
+          tvl = float(snap["tvl"]) / 1e6
 
-          # Messaggio da inviare
           message = (
               f"📊 Morpho – {vault['name']}\n"
               f"TVL: {tvl:.2f} M USDT\n"
@@ -82,101 +76,6 @@ jobs:
               f"(Base: {apy_base:.2f}% + Reward: {apy_reward:.2f}%)"
           )
 
-          # Invio messaggio su Telegram
-          telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-          res = requests.post(telegram_url, json={"chat_id": CHAT_ID, "text": message})
-
-          if res.status_code != 200:
-              print("Errore invio Telegram:", res.text)
-              sys.exit(1)
-
-          print("✅ Messaggio inviato:", message)
-          EOF
-name: Morpho Steakhouse Telegram
-
-on:
-  schedule:
-    - cron: "0 7 * * *"  # ogni giorno alle 07:00 UTC
-  workflow_dispatch:
-
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install Python dependencies
-        run: pip install requests
-
-      - name: Fetch Morpho vault data and notify Telegram
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python << 'EOF'
-          import requests, os, sys, json
-
-          BOT_TOKEN = os.environ['BOT_TOKEN']
-          CHAT_ID = os.environ['CHAT_ID']
-
-          # ID del vault Steakhouse USDT su Ethereum
-          vault_id = "0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
-
-          # Query GraphQL aggiornata
-          query = f"""
-          query {{
-            vault(id: "{vault_id}") {{
-              name
-              latestSnapshot {{
-                apy
-                apyBase
-                apyReward
-                tvl
-              }}
-            }}
-          }}
-          """
-
-          # Chiamata all'API GraphQL di Morpho
-          r = requests.post(
-              "https://api.morpho.org/graphql",
-              json={"query": query},
-              headers={"Content-Type": "application/json"}
-          )
-
-          try:
-              resp = r.json()
-          except Exception:
-              print("Risposta non JSON:", r.text)
-              sys.exit(1)
-
-          # Controllo errori GraphQL
-          if "errors" in resp:
-              print("Errore GraphQL:", json.dumps(resp["errors"], indent=2))
-              sys.exit(1)
-
-          vault = resp.get("data", {}).get("vault")
-          if not vault or not vault.get("latestSnapshot"):
-              print("Vault o snapshot non trovato:", resp)
-              sys.exit(1)
-
-          snap = vault["latestSnapshot"]
-
-          # Conversione dati
-          apy = float(snap["apy"]) * 100
-          apy_base = float(snap.get("apyBase", 0)) * 100
-          apy_reward = float(snap.get("apyReward", 0)) * 100
-          tvl = float(snap["tvl"]) / 1e6  # milioni di USDT
-
-          # Messaggio da inviare
-          message = (
-              f"📊 Morpho – {vault['name']}\n"
-              f"TVL: {tvl:.2f} M USDT\n"
-              f"APY totale: {apy:.2f}%\n"
-              f"(Base: {apy_base:.2f}% + Reward: {apy_reward:.2f}%)"
-          )
-
-          # Invio messaggio su Telegram
           telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
           res = requests.post(telegram_url, json={"chat_id": CHAT_ID, "text": message})
 
