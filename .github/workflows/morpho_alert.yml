@@ -1,4 +1,4 @@
-name: Morpho Vault Report
+name: Morpho Steakhouse Telegram
 
 on:
   schedule:
@@ -6,21 +6,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  morpho-report:
+  notify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+      - name: Install requests
+        run: pip install requests
 
-      - name: Install dependencies
-        run: pip install requests python-telegram-bot==13.15
-
-      - name: Run script
+      - name: Fetch Morpho vault data and notify Telegram
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python .github/workflows/send_morpho_report.py
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python << 'EOF'
+          import requests
+          import os
+
+          BOT_TOKEN = os.environ['BOT_TOKEN']
+          CHAT_ID = os.environ['CHAT_ID']
+
+          url = "https://api.morpho.org/graphql"
+          query = """
+          query {
+            vault(id: "0xbEef047a543E45807105E51A8BBEFCc5950fcfBa") {
+              name
+              apy
+              totalAssets
+            }
+          }
+          """
+          r = requests.post(url, json={"query": query})
+          vault = r.json()["data"]["vault"]
+
+          apy = float(vault["apy"]) * 100
+          tvl = float(vault["totalAssets"]) / 1e6  # milioni di USDT
+
+          message = (
+              f"📊 Morpho - {vault['name']}\n"
+              f"TVL: {tvl:.2f} M USDT\n"
+              f"APY: {apy:.2f}%"
+          )
+
+          telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+          requests.post(telegram_url, json={"chat_id": CHAT_ID, "text": message})
+          EOF
