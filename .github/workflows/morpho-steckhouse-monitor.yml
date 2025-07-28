@@ -1,4 +1,4 @@
-name: Morpho Vault Report
+name: Morpho Steakhouse Telegram (DefiLlama)
 
 on:
   schedule:
@@ -6,21 +6,65 @@ on:
   workflow_dispatch:
 
 jobs:
-  morpho-report:
+  notify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+      - name: Install Python dependencies
+        run: pip install requests
 
-      - name: Install dependencies
-        run: pip install requests python-telegram-bot==13.15
-
-      - name: Run script
+      - name: Fetch Morpho data from DefiLlama and notify Telegram
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python send_morpho_report.py
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python << 'EOF'
+          import requests
+          import os
+          import sys
+
+          BOT_TOKEN = os.environ['BOT_TOKEN']
+          CHAT_ID = os.environ['CHAT_ID']
+
+          url = "https://yields.llama.fi/pools"
+          r = requests.get(url)
+          if r.status_code != 200:
+              print("Errore API DefiLlama:", r.text)
+              sys.exit(1)
+
+          pools = r.json().get("data", [])
+          steakhouse = None
+          for p in pools:
+              if (
+                  p.get("project") == "morpho"
+                  and p.get("chain") == "Ethereum"
+                  and p.get("symbol") == "USDT"
+                  and "Steakhouse" in p.get("pool", "")  # identifica il vault
+              ):
+                  steakhouse = p
+                  break
+
+          if not steakhouse:
+              print("Pool Morpho Steakhouse USDT non trovato")
+              sys.exit(1)
+
+          tvl = steakhouse["tvlUsd"] / 1e6
+          apy = steakhouse["apy"]
+
+          message = (
+              f"📊 Morpho (DefiLlama)\n"
+              f"Vault: Steakhouse USDT\n"
+              f"TVL: {tvl:.2f} M USD\n"
+              f"APY: {apy:.2f}%"
+          )
+
+          telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+          res = requests.post(telegram_url, json={"chat_id": CHAT_ID, "text": message})
+
+          if res.status_code != 200:
+              print("Errore invio Telegram:", res.text)
+              sys.exit(1)
+
+          print("Messaggio inviato:", message)
+          EOF
