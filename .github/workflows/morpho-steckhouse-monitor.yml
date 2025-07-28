@@ -1,4 +1,4 @@
-name: Morpho Steakhouse Telegram (DefiLlama)
+name: Morpho Steakhouse Telegram
 
 on:
   schedule:
@@ -14,48 +14,54 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests
 
-      - name: Fetch Morpho data from DefiLlama and notify Telegram
+      - name: Fetch Morpho vault data and notify Telegram
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python << 'EOF'
-          import requests
-          import os
-          import sys
+          import requests, os, sys, json
 
           BOT_TOKEN = os.environ['BOT_TOKEN']
           CHAT_ID = os.environ['CHAT_ID']
 
-          url = "https://yields.llama.fi/pools"
-          r = requests.get(url)
-          if r.status_code != 200:
-              print("Errore API DefiLlama:", r.text)
+          vault_id = "0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
+          query = f"""
+          query {{
+            vault(id: "{vault_id}") {{
+              name
+              apy
+              totalAssets
+            }}
+          }}
+          """
+          r = requests.post(
+              "https://api.morpho.org/graphql",
+              json={"query": query},
+              headers={"Content-Type": "application/json"}
+          )
+
+          try:
+              resp = r.json()
+          except Exception:
+              print("Risposta non JSON:", r.text)
               sys.exit(1)
 
-          pools = r.json().get("data", [])
-          steakhouse = None
-          for p in pools:
-              if (
-                  p.get("project") == "morpho"
-                  and p.get("chain") == "Ethereum"
-                  and p.get("symbol") == "USDT"
-                  and "Steakhouse" in p.get("pool", "")  # identifica il vault
-              ):
-                  steakhouse = p
-                  break
-
-          if not steakhouse:
-              print("Pool Morpho Steakhouse USDT non trovato")
+          if "errors" in resp:
+              print("Errore GraphQL:", json.dumps(resp["errors"], indent=2))
               sys.exit(1)
 
-          tvl = steakhouse["tvlUsd"] / 1e6
-          apy = steakhouse["apy"]
+          vault = resp.get("data", {}).get("vault")
+          if not vault:
+              print("Vault non trovato nella risposta:", resp)
+              sys.exit(1)
+
+          apy = float(vault["apy"]) * 100
+          tvl = float(vault["totalAssets"]) / 1e6  # milioni di USDT
 
           message = (
-              f"📊 Morpho (DefiLlama)\n"
-              f"Vault: Steakhouse USDT\n"
-              f"TVL: {tvl:.2f} M USD\n"
+              f"📊 Morpho – {vault['name']}\n"
+              f"TVL: {tvl:.2f} M USDT\n"
               f"APY: {apy:.2f}%"
           )
 
@@ -66,5 +72,5 @@ jobs:
               print("Errore invio Telegram:", res.text)
               sys.exit(1)
 
-          print("Messaggio inviato:", message)
+          print("✅ Messaggio inviato:", message)
           EOF
