@@ -1,43 +1,26 @@
-name: Beefy TVL Alert
+name: Morpho Vault Report
 
 on:
   schedule:
-    - cron: '0 8 * * *'    # 08:00 UTC = 10:00 italiane
+    - cron: "0 7 * * *"  # ogni giorno alle 07:00 UTC
   workflow_dispatch:
 
 jobs:
-  alert:
+  morpho-report:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Beefy Stargate V2 ARB USDT TVL
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests python-telegram-bot==13.15
+
+      - name: Run script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq curl
-
-          echo "🔍 Recupero TVL di stargate-v2-arb-usdt…"
-
-          # Ottieni la mappa delle TVL da Beefy
-          DATA=$(curl -s https://api.beefy.finance/tvl)
-
-          # Estrai la TVL del vault stargate-v2-arb-usdt (ricerca ricorsiva)
-          TVL=$(echo "$DATA" | jq -r '.. | .["stargate-v2-arb-usdt"]? // empty')
-
-          echo "TVL corrente: $TVL USD"
-
-          # Soglia in USD; 65000000 = 65 milioni
-          THRESHOLD=65,000000
-
-          # Confronta la TVL con la soglia; se inferiore, genera alert
-          if echo "$TVL $THRESHOLD" | awk '{exit !($1 < $2)}'; then
-            MSG="⚠️ TVL sotto soglia: la TVL di *stargate-v2-arb-usdt* è scesa a \$${TVL}, inferiore a \$${THRESHOLD}."
-          else
-            MSG="✅ TVL nella norma: la TVL di *stargate-v2-arb-usdt* è \$${TVL}."
-          fi
-
-          # Invia il messaggio su Telegram
-          curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" \
-            -d text="$MSG" \
-            -d parse_mode="Markdown"
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python send_morpho_report.py
