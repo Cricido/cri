@@ -14,12 +14,12 @@ jobs:
     steps:
       - name: Check Morpho APY & Send Telegram
         run: |
+          # Installazione jq
           sudo apt-get update && sudo apt-get install -y jq
 
-          echo "📡 Recupero dati del vault Morpho Steakhouse USDT..."
+          echo "📡 Recupero dati dal vault Morpho Steakhouse USDT..."
 
-          VAULT="0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
-
+          # GraphQL query per vaultByAddress
           QUERY=$(cat <<'GRAPHQL'
           {
             "query": "query { vaultByAddress(address: \"0xbEef047a543E45807105E51A8BBEFCc5950fcfba\", chainId: 1) { state { totalAssetsUsd apy netApy } } }"
@@ -27,7 +27,7 @@ jobs:
 GRAPHQL
           )
 
-          # Richiesta a Morpho
+          # Richiesta API Morpho
           RESP=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$QUERY" \
@@ -35,13 +35,16 @@ GRAPHQL
 
           echo "DEBUG: Risposta API: $RESP"
 
+          # Estrazione dati con jq
           TVL=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.totalAssetsUsd')
           APY=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.apy')
           NET_APY=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.netApy')
 
+          # Controllo se i dati sono validi
           if [[ -z "$TVL" || "$TVL" == "null" ]]; then
-            MSG="❌ ERRORE: impossibile recuperare dati dal vault Morpho."
+            MSG="❌ ERRORE: impossibile recuperare i dati dal vault Morpho."
           else
+            # Conversione dei valori
             TVL_M=$(echo "$TVL/1000000" | bc -l | awk '{printf "%.2f", $0}')
             APY_PERC=$(echo "$APY * 100" | bc -l | awk '{printf "%.2f", $0}')
             NET_APY_PERC=$(echo "$NET_APY * 100" | bc -l | awk '{printf "%.2f", $0}')
@@ -51,7 +54,7 @@ GRAPHQL
 
           echo "DEBUG: Messaggio finale: $MSG"
 
-          # Invio messaggio Telegram
+          # Invio messaggio a Telegram
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id=${{ secrets.CHAT_ID }} \
             -d text="$MSG"
