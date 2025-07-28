@@ -1,115 +1,26 @@
-name: Morpho Steakhouse Monitor
+name: Morpho Vault Report
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # 8:00 UTC
-    - cron: '0 14 * * *'  # 14:00 UTC
-    - cron: '0 20 * * *'  # 20:00 UTC
+    - cron: "0 7 * * *"  # ogni giorno alle 07:00 UTC
   workflow_dispatch:
 
 jobs:
-  notify:
+  morpho-report:
     runs-on: ubuntu-latest
     steps:
-      - name: Monitor Morpho and send Telegram alert
-        shell: bash
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests python-telegram-bot==13.15
+
+      - name: Run script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          SOGLIA_PEG: 0.995      # Soglia PEG USDT
-          SOGLIA_APY: 4.0        # Soglia APY
-          SOGLIA_TVL: 1000000000 # Soglia TVL (es. 1B USD)
-          VAULT_ADDRESS: "0xbeef047a543e45807105e51a8bbefc5950fcfba"  # Indirizzo lowercase del vault Steakhouse USDT
-        run: |
-          set -e
-          sudo apt-get install -y jq bc curl  # Installa dipendenze
-
-          # Funzione per fetch con ritentativi
-          fetch_with_retry() {
-            for i in {1..3}; do
-              RESULT=$(curl -s --max-time 10 "$1") && [[ -n "$RESULT" ]] && echo "$RESULT" && return
-              echo "Ritentativo $i/3 per $1..." >&2
-              sleep 2
-            done
-            echo "Errore: Impossibile fetch $1" >&2
-            exit 1
-          }
-
-          echo "=== Controllo PEG USDT ==="
-          PEG_DATA=$(fetch_with_retry "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd")
-          PEG=$(echo "$PEG_DATA" | jq -r '.tether.usd // 0')
-          echo "PEG USDT: $PEG"
-
-          echo "=== Controllo TVL e APY Steakhouse USDT su Ethereum (Morpho) ==="
-          MORPHO_DATA=$(fetch_with_retry "https://api.morpho.org/api/v1/vaults/all?chainId=1")  # API Morpho per Ethereum
-          echo "Debug: Risposta API Morpho (primi 200 char): ${MORPHO_DATA:0:200}"  # Debug
-          echo "Debug: Numero di vault in API: $(echo "$MORPHO_DATA" | jq 'if type == "array" then length else (.vaults // []) | length end')"  # Debug: Conta vault
-
-          # Estrae info vault
-          VAULT_INFO=$(echo "$MORPHO_DATA" | jq --arg addr "$VAULT_ADDRESS" '
-            (if type == "array" then .[] else (.vaults // [])[] end) |
-            select((.address // "" | ascii_downcase) == $addr)')
-          echo "Debug: VAULT_INFO = $VAULT_INFO"  # Debug
-
-          if [ -z "$VAULT_INFO" ] || [ "$VAULT_INFO" = "null" ]; then
-            echo "Vault non trovato - uso fallback DefiLlama per Morpho su Ethereum."
-            ALERTS="${ALERTS}⚠️ Vault Steakhouse USDT non trovato nell'API Morpho - usando dati generali!%0A"
-
-            # Fallback: TVL generale Morpho su Ethereum da DefiLlama
-            PROTOCOL_DATA=$(fetch_with_retry "https://api.llama.fi/protocol/morpho-blue")
-            TVL=$(echo "$PROTOCOL_DATA" | jq -r '.chainTvls.Ethereum.tvl[-1].totalLiquidityUSD // 0')
-            TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
-            echo "Fallback TVL: $TVL_FORMATTED USD (raw: $TVL)"
-
-            # Fallback: APY medio da DefiLlama Yields per Morpho su Ethereum, USDT
-            YIELDS_DATA=$(fetch_with_retry "https://yields.llama.fi/pools")
-            APY=$(echo "$YIELDS_DATA" | jq -r '[.data[] | select(.chain == "Ethereum" and .project == "morpho-blue" and (.symbol | test("USDT"; "i"))) | .apy // 0] | if length > 0 then (add / length | round / 100.0) else "N/A" end')
-            echo "Fallback APY: $APY%"
-          else
-            # TVL specifico
-            TVL_RAW=$(echo "$VAULT_INFO" | jq -r '.state.totalAssets // "0"')
-            echo "Debug: TVL_RAW = $TVL_RAW"
-            TVL=$(echo "scale=2; $TVL_RAW / 1000000" | bc -l)
-            TVL_FORMATTED=$(echo "$TVL" | awk '{ if ($1 >= 1000000000) printf "%.2fB", $1/1000000000; else if ($1 >= 1000000) printf "%.2fM", $1/1000000; else printf "%.0f", $1 }')
-            echo "TVL: $TVL_FORMATTED USD (raw: $TVL)"
-
-            # APY specifico
-            APY_RAW=$(echo "$VAULT_INFO" | jq -r '.state.supplyApy // "0"')
-            echo "Debug: APY_RAW = $APY_RAW"
-            APY=$(echo "scale=2; ($APY_RAW / 1000000000000000000000000000) * 100" | bc -l)
-            if [ "$APY" = "0.00" ]; then APY="N/A"; fi
-            echo "APY: $APY%"
-          fi
-
-          # Alert logic (skip if N/A)
-          if (( $(echo "$PEG < $SOGLIA_PEG" | bc -l) )); then
-            ALERTS="${ALERTS}⚠️ PEG USDT sotto $SOGLIA_PEG (attuale: $PEG)%0A"
-          fi
-          if [ "$APY" != "N/A" ] && (( $(echo "$APY < $SOGLIA_APY" | bc -l) )); then
-            ALERTS="${ALERTS}⚠️ APY sceso a $APY%% (soglia: $SOGLIA_APY%%)%0A"
-          fi
-          if [ "$TVL" != "N/A" ] && (( $(echo "$TVL < $SOGLIA_TVL" | bc -l) )); then
-            ALERTS="${ALERTS}⚠️ TVL sotto $SOGLIA_TVL USD (attuale: $TVL_FORMATTED)%0A"
-          fi
-
-          REPORT="Monitoraggio Steakhouse USDT su Ethereum (Morpho)%0AUSDT PEG: $PEG%0ATVL: $TVL_FORMATTED USD%0AAPY: ${APY}%%"
-
-          if [ -n "$ALERTS" ]; then
-            MSG="⚠️ ALLERTA%0A${ALERTS}%0A${REPORT}"
-          else
-            MSG="✅ Tutto OK%0A${REPORT}"
-          fi
-
-          # Troncamento di sicurezza
-          MSG=$(echo "$MSG" | cut -c1-4000)
-
-          echo "=== Invio messaggio Telegram ==="
-          RESPONSE=$(curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" \
-            -d text="$MSG" \
-            -d parse_mode="Markdown")
-          if [[ $RESPONSE != *'"ok":true'* ]]; then
-            echo "Errore invio Telegram: $RESPONSE" >&2
-            exit 1
-          fi
-          echo "Messaggio inviato con successo!"
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python .github/workflows/send_morpho_report.py
