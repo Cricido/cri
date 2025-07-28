@@ -53,7 +53,25 @@ jobs:
             APY_PERC=$(echo "scale=2; $APY * 100" | bc | awk '{printf "%.2f", $0}')
             NET_APY_PERC=$(echo "scale=2; $NET_APY * 100" | bc | awk '{printf "%.2f", $0}')
 
+            # Messaggio base
             MSG="📊 Morpho – Steakhouse USDT\nTVL: ${TVL_M} M USD\nAPY lordo: ${APY_PERC}%\nAPY netto: ${NET_APY_PERC}%"
+
+            # Soglie per alert rischio alto (es. possibile hack)
+            TVL_THRESHOLD=20000000  # 20M USD
+            NET_APY_THRESHOLD=0.04  # 4% (come decimale)
+
+            ALERT=""
+            if (( $(echo "$TVL < $TVL_THRESHOLD" | bc -l) )); then
+              ALERT+="⚠️ **ALERT TVL**: Calo sotto 20M USD (possibile rischio alto, es. hack o exodus)!\n"
+            fi
+            if (( $(echo "$NET_APY < $NET_APY_THRESHOLD" | bc -l) )); then
+              ALERT+="⚠️ **ALERT APY**: Net APY sotto 4% (possibile instabilità o problema nel vault)!\n"
+            fi
+
+            # Se c'è alert, aggiungilo al messaggio
+            if [[ ! -z "$ALERT" ]]; then
+              MSG="${MSG}\n\n${ALERT}🚨 **Azione consigliata**: Indaga su Morpho/Discord e considera withdraw."
+            fi
           fi
 
           echo "DEBUG: Messaggio finale: $MSG"
