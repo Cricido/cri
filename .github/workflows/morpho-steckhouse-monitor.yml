@@ -25,17 +25,15 @@ jobs:
           BOT_TOKEN = os.environ['BOT_TOKEN']
           CHAT_ID = os.environ['CHAT_ID']
 
-          vault_id = "0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
-
+          vault_address = "0xbEef047a543E45807105E51A8BBEFCc5950fcfba"
           query = f"""
           query {{
-            vault(id: "{vault_id}") {{
-              name
-              latestSnapshot {{
+            vaultByAddress(address: "{vault_address}", chainId: 1) {{
+              address
+              state {{
+                totalAssetsUsd
                 apy
-                apyBase
-                apyReward
-                tvl
+                netApy
               }}
             }}
           }}
@@ -57,23 +55,21 @@ jobs:
               print("Errore GraphQL:", json.dumps(resp["errors"], indent=2))
               sys.exit(1)
 
-          vault = resp.get("data", {}).get("vault")
-          if not vault or not vault.get("latestSnapshot"):
-              print("Vault o snapshot non trovato:", resp)
+          vault = resp.get("data", {}).get("vaultByAddress")
+          if not vault or not vault.get("state"):
+              print("Vault o stato non trovato:", resp)
               sys.exit(1)
 
-          snap = vault["latestSnapshot"]
-
-          apy = float(snap["apy"]) * 100
-          apy_base = float(snap.get("apyBase", 0)) * 100
-          apy_reward = float(snap.get("apyReward", 0)) * 100
-          tvl = float(snap["tvl"]) / 1e6
+          state = vault["state"]
+          tvl = float(state["totalAssetsUsd"]) / 1e6  # milioni di USD
+          apy = float(state["apy"]) * 100
+          net_apy = float(state.get("netApy", 0)) * 100
 
           message = (
-              f"📊 Morpho – {vault['name']}\n"
-              f"TVL: {tvl:.2f} M USDT\n"
-              f"APY totale: {apy:.2f}%\n"
-              f"(Base: {apy_base:.2f}% + Reward: {apy_reward:.2f}%)"
+              f"📊 Morpho – Steakhouse USDT\n"
+              f"TVL: {tvl:.2f} M USD\n"
+              f"APY (gross): {apy:.2f}%\n"
+              f"APY (netto): {net_apy:.2f}%"
           )
 
           telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
