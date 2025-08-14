@@ -9,17 +9,21 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r .github/requirements_telegram.txt
+
       - name: Send DeBank totals to Telegram
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
