@@ -1,34 +1,40 @@
-name: DeBank Total → Telegram
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+import sys
+import time
+import argparse
+import requests
 
-on:
-  schedule:
-    - cron: '0 6 * * *'   # 08:00 CEST (UTC+2)
-    - cron: '0 12 * * *'  # 14:00 CEST (UTC+2)
-  workflow_dispatch:
+DEBANK_PUBLIC_TOKENS_URL = "https://api.debank.com/user/token_list"
+DEFAULT_CHAINS = ["eth","arbitrum","base","optimism","polygon","bsc","avalanche"]
 
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+STABLES = {
+    "USDT","USDC","USDC.e","DAI","FRAX","LUSD","GUSD","TUSD","USDP","USDV","crvUSD",
+    "USDe","sUSDe","USDY","PYUSD","sFRAX","USDM","OUSG","USDbC","USDT.e","USDTb","USDC.b"
+}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r .github/requirements_telegram.txt
-
-      - name: Send DeBank totals to Telegram
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          python .github/debank_total_to_telegram_simple.py \
-            --address 0x6bD872Ef0749eBa102A9e7Cd9FC24Ed2A5C88679 \
-            --chains eth,arbitrum,base,optimism,polygon
+def fetch_totals_public(address: str, chains):
+    total = 0.0
+    stable_total = 0.0
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for ch in chains:
+        try:
+            r = requests.get(
+                DEBANK_PUBLIC_TOKENS_URL,
+                params={"id": address, "is_all": "true", "chain": ch},
+                headers=headers, timeout=20
+            )
+            r.raise_for_status()
+            js = r.json()
+            tokens = js.get("data") or []
+            for t in tokens:
+                sym = (t.get("symbol") or "").strip()
+                amt = float(t.get("amount") or 0)
+                price = float(t.get("price") or 0)
+                val = amt * price
+                total += val
+                if sym in STABLES:
+                    stable_total += val
+            time.sleep(0.2)
+        except Exception as e:
