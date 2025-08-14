@@ -21,13 +21,13 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements_telegram.txt
+          pip install -r .github/requirements_telegram.txt
 
       - name: Send DeBank totals to Telegram
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          python debank_total_to_telegram_simple.py \
+          python .github/debank_total_to_telegram_simple.py \
             --address 0x6bD872Ef0749eBa102A9e7Cd9FC24Ed2A5C88679 \
             --chains eth,arbitrum,base,optimism,polygon
