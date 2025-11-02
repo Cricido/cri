@@ -1,3 +1,23 @@
+name: Morpho Steakhouse USDC
+
+on:
+  schedule:
+    # GitHub Actions è in UTC; a Roma: CET=UTC+1 / CEST=UTC+2
+    - cron: "0 6 * * *"   # 07:00 CET / 08:00 CEST
+    - cron: "0 11 * * *"  # 12:00 CET / 13:00 CEST
+    - cron: "0 16 * * *"  # 17:00 CET / 18:00 CEST
+    - cron: "0 21 * * *"  # 22:00 CET / 23:00 CEST
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      API_URL: "https://api.morpho.org/graphql"
+      VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Steakhouse USDC
+      CHAIN_ID: 1
+      TVL_THRESHOLD_USD: "20000000"   # valuta 50M per USDC se vuoi più prudenza
+      NET_APY_THRESHOLD: "0.04"       # 4% (decimale)
     steps:
       - name: Check Morpho USDC & Send Telegram
         shell: bash
@@ -8,14 +28,14 @@
 
           echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
 
-          # Costruiamo il payload GraphQL senza read -d ''
+          # Payload GraphQL costruito in modo sicuro
           QUERY=$(jq -n \
             --arg address "$VAULT_ADDRESS" \
-            --argjson chainId "$CHAIN_ID" \
             --arg q 'query($address: String!, $chainId: Int!) { vaultByAddress(address: $address, chainId: $chainId) { state { totalAssetsUsd apy netApy } } }' \
+            --argjson chainId "$CHAIN_ID" \
             '{query:$q, variables:{address:$address, chainId:$chainId}}')
 
-          # Chiamata API con log HTTP e body salvato
+          # Chiamata API con status e salvataggio body
           TMP="/tmp/morpho_resp.json"
           HTTP_CODE=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
             -H "Content-Type: application/json" \
@@ -24,34 +44,29 @@
 
           echo "HTTP Morpho: $HTTP_CODE"
           if [[ ! -s "$TMP" ]]; then
-            echo "❌ Nessun body ricevuto da Morpho."
-            exit 1
+            echo "❌ Nessun body ricevuto da Morpho."; exit 1
           fi
 
           echo "DEBUG (estratto):"
-          # Niente operatori // o ? — compatibile ovunque
           if ! jq '{data: (if has("data") then .data else null end), errors: (if has("errors") then .errors else null end)}' "$TMP"; then
-            echo "DEBUG (raw):"
-            cat "$TMP"
+            echo "DEBUG (raw):"; cat "$TMP"
           fi
 
-          # Se GraphQL riporta errors, mostriamoli ed usciamo
+          # Errori GraphQL?
           if jq -e 'has("errors") and (.errors | length > 0)' "$TMP" >/dev/null; then
-            echo "❌ GraphQL errors:"
-            jq '.errors' "$TMP"
-            exit 1
+            echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1
           fi
 
-          # Validazione campi
-          if ! jq -e 'has("data")
-                       and .data|has("vaultByAddress")
-                       and .data.vaultByAddress|has("state")
-                       and (.data.vaultByAddress.state|has("totalAssetsUsd"))
-                       and (.data.vaultByAddress.state|has("apy"))
-                       and (.data.vaultByAddress.state|has("netApy"))' "$TMP" >/dev/null; then
-            echo "❌ Struttura inattesa o campi mancanti:"
-            cat "$TMP"
-            exit 1
+          # Validazione campi attesi
+          if ! jq -e '
+              has("data") and
+              .data|has("vaultByAddress") and
+              .data.vaultByAddress|has("state") and
+              (.data.vaultByAddress.state|has("totalAssetsUsd")) and
+              (.data.vaultByAddress.state|has("apy")) and
+              (.data.vaultByAddress.state|has("netApy"))
+            ' "$TMP" >/dev/null; then
+            echo "❌ Struttura inattesa o campi mancanti:"; cat "$TMP"; exit 1
           fi
 
           TVL=$(jq -r '.data.vaultByAddress.state.totalAssetsUsd' "$TMP")
@@ -64,10 +79,10 @@
 
           ALERTS=""
           if awk -v tvl="$TVL" -v thr="$TVL_THRESHOLD_USD" 'BEGIN { exit !(tvl < thr) }'; then
-            ALERTS+="⚠️ <b>ALERT TVL</b>: sotto 20M USD.<br/>"
+            ALERTS+="⚠️ <b>ALERT TVL</b>: sotto $(printf "%'.0f" "$TVL_THRESHOLD_USD") USD.<br/>"
           fi
           if awk -v a="$NET_APY" -v thr="$NET_APY_THRESHOLD" 'BEGIN { exit !(a < thr) }'; then
-            ALERTS+="⚠️ <b>ALERT APY</b>: sotto 4%.<br/>"
+            ALERTS+="⚠️ <b>ALERT APY</b>: sotto $(awk -v t="$NET_APY_THRESHOLD" "BEGIN{printf(\"%.0f%%\", t*100)}").<br/>"
           fi
 
           STATUS="✅ <b>Stato: Tutto OK</b>"
@@ -80,6 +95,7 @@
           MSG="<b>Morpho – Steakhouse USDC</b><br/>TVL: ${TVL_M} M USD<br/>APY lordo: ${APY_PERC}%<br/>APY netto: ${NET_APY_PERC}%<br/><br/>${ALERTS}${STATUS}"
           [[ -n "$ACTION" ]] && MSG="${MSG}<br/>${ACTION}"
 
+          # Invio Telegram (HTML + JSON, con retry)
           TELEGRAM_API="https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage"
           PAYLOAD=$(jq -n \
             --arg chat_id "${{ secrets.CHAT_ID }}" \
