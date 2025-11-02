@@ -27,13 +27,12 @@ jobs:
 
           echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
 
-          # Costruzione payload GraphQL
-          read -r -d '' QUERY <<EOF
-          {
-            "query": "query(\$address: String!, \$chainId: Int!) { vaultByAddress(address: \$address, chainId: \$chainId) { state { totalAssetsUsd apy netApy } } }",
-            "variables": { "address": "$VAULT_ADDRESS", "chainId": $CHAIN_ID }
-          }
-          EOF
+          # Costruiamo il payload GraphQL in modo sicuro (niente read -d '')
+          QUERY=$(jq -n \
+            --arg address "$VAULT_ADDRESS" \
+            --argjson chainId "$CHAIN_ID" \
+            --arg q 'query($address: String!, $chainId: Int!) { vaultByAddress(address: $address, chainId: $chainId) { state { totalAssetsUsd apy netApy } } }' \
+            '{query:$q, variables:{address:$address, chainId:$chainId}}')
 
           # Chiamata API con log HTTP e body salvato
           TMP="/tmp/morpho_resp.json"
@@ -58,7 +57,7 @@ jobs:
             exit 1
           fi
 
-          # Validazione campi (check booleano unico, non multipli output)
+          # Validazione campi
           if ! jq -e '.data
                        and .data.vaultByAddress
                        and .data.vaultByAddress.state
@@ -96,7 +95,6 @@ jobs:
           MSG="<b>Morpho – Steakhouse USDC</b><br/>TVL: ${TVL_M} M USD<br/>APY lordo: ${APY_PERC}%<br/>APY netto: ${NET_APY_PERC}%<br/><br/>${ALERTS}${STATUS}"
           [[ -n "$ACTION" ]] && MSG="${MSG}<br/>${ACTION}"
 
-          # Invio Telegram
           TELEGRAM_API="https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage"
           PAYLOAD=$(jq -n \
             --arg chat_id "${{ secrets.CHAT_ID }}" \
