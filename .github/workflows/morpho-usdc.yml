@@ -1,4 +1,4 @@
-name: Morpho Steakhouse USDC
+name: Morpho Steakhouse USDC (alt)
 
 on:
   schedule:
@@ -16,11 +16,12 @@ jobs:
       API_URL: "https://api.morpho.org/graphql"
       VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Steakhouse USDC
       CHAIN_ID: 1
-      TVL_THRESHOLD_USD: "20000000"
-      NET_APY_THRESHOLD: "0.04"
-      # 🔐 Fallback automatici: prende il primo secret non vuoto
+      TVL_THRESHOLD_USD: "20000000"    # valuta 50M se vuoi più prudenza
+      NET_APY_THRESHOLD: "0.04"        # 4% (decimale)
+      # Fallback ai nomi dei secrets usati nello script USDT
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN || secrets.TELEGRAM_BOT_TOKEN || secrets.BOT_TOKEN }}
       CHAT_ID: ${{ secrets.CHAT_ID || secrets.TELEGRAM_CHAT_ID || secrets.CHANNEL_ID }}
+
     steps:
       - name: Setup tools
         shell: bash
@@ -28,79 +29,50 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get update >/dev/null && sudo apt-get install -y jq bc gawk >/dev/null
 
-      - name: Telegram diagnostics (token & chat)
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ -z "${TELEGRAM_TOKEN:-}" ]]; then
-            echo "❌ Nessun token Telegram trovato nei secrets: TELEGRAM_TOKEN / TELEGRAM_BOT_TOKEN / BOT_TOKEN"
-            exit 1
-          fi
-          if [[ -z "${CHAT_ID:-}" ]]; then
-            echo "❌ Nessun CHAT_ID trovato nei secrets: CHAT_ID / TELEGRAM_CHAT_ID / CHANNEL_ID"
-            exit 1
-          fi
-
-          echo "✔️ Token presente (lunghezza: ${#TELEGRAM_TOKEN})"
-          echo "✔️ CHAT_ID presente: ${CHAT_ID}"
-
-          RESP_ME=$(curl -sS "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe")
-          echo "getMe:"; echo "$RESP_ME" | jq .
-          echo "$RESP_ME" | jq -e '.ok == true' >/dev/null || { echo "❌ TOKEN non valido (getMe fallito)"; exit 1; }
-
-          PING=$(jq -n --arg chat_id "$CHAT_ID" --arg text "Ping USDC ✅" '{chat_id:$chat_id, text:$text}')
-          RESP_PING=$(curl -sS -H "Content-Type: application/json" -d "$PING" \
-            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage")
-          echo "sendMessage test:"; echo "$RESP_PING" | jq .
-          echo "$RESP_PING" | jq -e '.ok == true' >/dev/null || { echo "❌ Invio test fallito (controlla che il bot sia nel gruppo e che il CHAT_ID sia corretto: per i supergruppi inizia con -100)"; exit 1; }
-
       - name: Fetch Morpho data
+        id: morpho
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
-
+          # Costruisci payload GraphQL
           QUERY=$(jq -n \
             --arg address "$VAULT_ADDRESS" \
             --arg q 'query($address: String!, $chainId: Int!) { vaultByAddress(address: $address, chainId: $chainId) { state { totalAssetsUsd apy netApy } } }' \
             --argjson chainId "$CHAIN_ID" \
             '{query:$q, variables:{address:$address, chainId:$chainId}}')
 
-          TMP="/tmp/morpho_resp.json"
+          # Chiamata API
+          TMP="/tmp/morpho_usdc.json"
           HTTP_CODE=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
             -H "Content-Type: application/json" \
             -d "$QUERY" \
             -o "$TMP" -w "%{http_code}" "$API_URL" || true)
-
           echo "HTTP Morpho: $HTTP_CODE"
-          if [[ ! -s "$TMP" ]]; then
-            echo "❌ Nessun body ricevuto da Morpho."; exit 1
-          fi
 
-          if jq -e 'has("errors") and (.errors | length > 0)' "$TMP" >/dev/null; then
-            echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1
-          fi
+          # Controlli base
+          [[ -s "$TMP" ]] || { echo "❌ Nessun body ricevuto da Morpho"; exit 1; }
+          jq -e 'has("errors") | not' "$TMP" >/dev/null || { echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1; }
+          jq -e '
+            has("data") and
+            .data|has("vaultByAddress") and
+            .data.vaultByAddress|has("state") and
+            (.data.vaultByAddress.state|has("totalAssetsUsd")) and
+            (.data.vaultByAddress.state|has("apy")) and
+            (.data.vaultByAddress.state|has("netApy"))
+          ' "$TMP" >/dev/null || { echo "❌ Struttura inattesa"; cat "$TMP"; exit 1; }
 
-          if ! jq -e '
-              has("data") and
-              .data|has("vaultByAddress") and
-              .data.vaultByAddress|has("state") and
-              (.data.vaultByAddress.state|has("totalAssetsUsd")) and
-              (.data.vaultByAddress.state|has("apy")) and
-              (.data.vaultByAddress.state|has("netApy"))
-            ' "$TMP" >/dev/null; then
-            echo "❌ Struttura inattesa o campi mancanti:"; cat "$TMP"; exit 1
-          fi
-
+          # Estrai valori grezzi
           TVL=$(jq -r '.data.vaultByAddress.state.totalAssetsUsd' "$TMP")
           APY=$(jq -r '.data.vaultByAddress.state.apy' "$TMP")
           NET_APY=$(jq -r '.data.vaultByAddress.state.netApy' "$TMP")
 
+          # Formatta per il messaggio
           TVL_M=$(awk -v tvl="$TVL" 'BEGIN { printf("%.2f", tvl/1000000) }')
           APY_PERC=$(awk -v a="$APY" 'BEGIN { printf("%.2f", a*100) }')
           NET_APY_PERC=$(awk -v a="$NET_APY" 'BEGIN { printf("%.2f", a*100) }')
 
+          # Valuta alert
           ALERTS=""
           if awk -v tvl="$TVL" -v thr="$TVL_THRESHOLD_USD" 'BEGIN { exit !(tvl < thr) }'; then
             ALERTS+="⚠️ <b>ALERT TVL</b>: sotto $(printf "%'.0f" "$TVL_THRESHOLD_USD") USD.<br/>"
@@ -119,13 +91,38 @@ jobs:
           MSG="<b>Morpho – Steakhouse USDC</b><br/>TVL: ${TVL_M} M USD<br/>APY lordo: ${APY_PERC}%<br/>APY netto: ${NET_APY_PERC}%<br/><br/>${ALERTS}${STATUS}"
           [[ -n "$ACTION" ]] && MSG="${MSG}<br/>${ACTION}"
 
+          # Esponi output per lo step successivo
+          {
+            echo "TVL_M=$TVL_M"
+            echo "APY_PERC=$APY_PERC"
+            echo "NET_APY_PERC=$NET_APY_PERC"
+            echo "MESSAGE<<EOF"
+            echo "$MSG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Controlli secrets (fallback già in env)
+          [[ -n "${TELEGRAM_TOKEN:-}" ]] || { echo "❌ Nessun token Telegram nei secrets"; exit 1; }
+          [[ -n "${CHAT_ID:-}" ]] || { echo "❌ Nessun CHAT_ID nei secrets"; exit 1; }
+
+          # Messaggio dall'output precedente
+          MSG="${{ steps.morpho.outputs.MESSAGE }}"
+
           PAYLOAD=$(jq -n \
             --arg chat_id "$CHAT_ID" \
             --arg text "$MSG" \
             --arg mode "HTML" \
             '{chat_id:$chat_id, text:$text, parse_mode:$mode, disable_web_page_preview:true}')
 
-          TELEGRAM_RESP=$(curl -sS -H "Content-Type: application/json" -d "$PAYLOAD" \
+          RESP=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
             "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage")
-          echo "sendMessage finale:"; echo "$TELEGRAM_RESP" | jq .
-          echo "$TELEGRAM_RESP" | jq -e '.ok == true' >/dev/null || { echo "❌ Invio finale fallito"; exit 1; }
+
+          echo "Telegram response:"; echo "$RESP" | jq .
+          echo "$RESP" | jq -e '.ok == true' >/dev/null || { echo "❌ Invio Telegram fallito"; exit 1; }
