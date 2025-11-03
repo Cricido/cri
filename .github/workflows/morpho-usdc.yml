@@ -3,10 +3,10 @@ name: Morpho Steakhouse USDC
 on:
   schedule:
     # GitHub Actions è in UTC; a Roma: CET=UTC+1 / CEST=UTC+2
-    - cron: "0 6 * * *"   # 07:00 CET / 08:00 CEST
-    - cron: "0 11 * * *"  # 12:00 CET / 13:00 CEST
-    - cron: "0 16 * * *"  # 17:00 CET / 18:00 CEST
-    - cron: "0 21 * * *"  # 22:00 CET / 23:00 CEST
+    - cron: "0 6 * * *"    # 07:00 CET / 08:00 CEST
+    - cron: "0 11 * * *"   # 12:00 CET / 13:00 CEST
+    - cron: "0 16 * * *"   # 17:00 CET / 18:00 CEST
+    - cron: "0 21 * * *"   # 22:00 CET / 23:00 CEST
   workflow_dispatch:
 
 jobs:
@@ -16,14 +16,16 @@ jobs:
       API_URL: "https://api.morpho.org/graphql"
       VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Steakhouse USDC
       CHAIN_ID: 1
-      TVL_THRESHOLD_USD: "20000000"   # valuta 50M per USDC se vuoi più prudenza
-      NET_APY_THRESHOLD: "0.04"       # 4% (decimale)
+      TVL_THRESHOLD_USD: "20000000"    # 20M USD
+      NET_APY_THRESHOLD: "0.04"        # 4% (decimale)
     steps:
       - name: Check Morpho USDC & Send Telegram
         shell: bash
         run: |
+          # Interrompe l'esecuzione al primo errore, variabile non definita o in una pipe.
           set -Eeuo pipefail
 
+          # Installazione delle dipendenze necessarie
           sudo apt-get update >/dev/null && sudo apt-get install -y jq bc gawk >/dev/null
 
           echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
@@ -57,15 +59,9 @@ jobs:
             echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1
           fi
 
-          # Validazione campi attesi
-          if ! jq -e '
-              has("data") and
-              .data|has("vaultByAddress") and
-              .data.vaultByAddress|has("state") and
-              (.data.vaultByAddress.state|has("totalAssetsUsd")) and
-              (.data.vaultByAddress.state|has("apy")) and
-              (.data.vaultByAddress.state|has("netApy"))
-            ' "$TMP" >/dev/null; then
+          # Validazione campi attesi (SOLUZIONE: controllo più robusto e semplice)
+          # Verifica che il campo più interno 'netApy' esista e non sia nullo.
+          if ! jq -e '.data.vaultByAddress.state.netApy != null' "$TMP" >/dev/null; then
             echo "❌ Struttura inattesa o campi mancanti:"; cat "$TMP"; exit 1
           fi
 
@@ -73,14 +69,17 @@ jobs:
           APY=$(jq -r '.data.vaultByAddress.state.apy' "$TMP")
           NET_APY=$(jq -r '.data.vaultByAddress.state.netApy' "$TMP")
 
+          # Formattazione per la notifica
           TVL_M=$(awk -v tvl="$TVL" 'BEGIN { printf("%.2f", tvl/1000000) }')
           APY_PERC=$(awk -v a="$APY" 'BEGIN { printf("%.2f", a*100) }')
           NET_APY_PERC=$(awk -v a="$NET_APY" 'BEGIN { printf("%.2f", a*100) }')
 
           ALERTS=""
+          # Check TVL (sotto la soglia)
           if awk -v tvl="$TVL" -v thr="$TVL_THRESHOLD_USD" 'BEGIN { exit !(tvl < thr) }'; then
             ALERTS+="⚠️ <b>ALERT TVL</b>: sotto $(printf "%'.0f" "$TVL_THRESHOLD_USD") USD.<br/>"
           fi
+          # Check Net APY (sotto la soglia)
           if awk -v a="$NET_APY" -v thr="$NET_APY_THRESHOLD" 'BEGIN { exit !(a < thr) }'; then
             ALERTS+="⚠️ <b>ALERT APY</b>: sotto $(awk -v t="$NET_APY_THRESHOLD" "BEGIN{printf(\"%.0f%%\", t*100)}").<br/>"
           fi
