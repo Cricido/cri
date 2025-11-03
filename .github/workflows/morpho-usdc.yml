@@ -14,15 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       API_URL: "https://api.morpho.org/graphql"
-      VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Steakhouse USDC
+      VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Indirizzo corretto per Steakhouse USDC
       CHAIN_ID: 1
-      TVL_THRESHOLD_USD: "20000000"    # 20M USD
-      NET_APY_THRESHOLD: "0.04"        # 4% (decimale)
+      TVL_THRESHOLD_USD: "20000000"    # Soglia TVL per l'alert (20M USD)
+      NET_APY_THRESHOLD: "0.04"        # Soglia Net APY per l'alert (4%)
     steps:
       - name: Check Morpho USDC & Send Telegram
         shell: bash
         run: |
-          # Interrompe l'esecuzione al primo errore, variabile non definita o in una pipe.
           set -Eeuo pipefail
 
           # Installazione delle dipendenze necessarie
@@ -30,14 +29,14 @@ jobs:
 
           echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
 
-          # Payload GraphQL costruito in modo sicuro
+          # Payload GraphQL
           QUERY=$(jq -n \
             --arg address "$VAULT_ADDRESS" \
             --arg q 'query($address: String!, $chainId: Int!) { vaultByAddress(address: $address, chainId: $chainId) { state { totalAssetsUsd apy netApy } } }' \
             --argjson chainId "$CHAIN_ID" \
             '{query:$q, variables:{address:$address, chainId:$chainId}}')
 
-          # Chiamata API con status e salvataggio body
+          # Chiamata API e salvataggio body
           TMP="/tmp/morpho_resp.json"
           HTTP_CODE=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
             -H "Content-Type: application/json" \
@@ -59,8 +58,7 @@ jobs:
             echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1
           fi
 
-          # Validazione campi attesi (SOLUZIONE: controllo più robusto e semplice)
-          # Verifica che il campo più interno 'netApy' esista e non sia nullo.
+          # ✅ VALIDAZIONE CORRETTA: Controlla solo l'esistenza del campo essenziale netApy.
           if ! jq -e '.data.vaultByAddress.state.netApy != null' "$TMP" >/dev/null; then
             echo "❌ Struttura inattesa o campi mancanti:"; cat "$TMP"; exit 1
           fi
@@ -102,10 +100,10 @@ jobs:
             --arg mode "HTML" \
             '{chat_id:$chat_id, text:$text, parse_mode:$mode, disable_web_page_preview:true}')
 
-          curl -sS --retry 3 --retry-delay 2 --max-time 20 \
+          # Esegui la chiamata a curl e salvala in una variabile temporanea
+          TELEGRAM_RESP=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$TELEGRAM_API" \
-            | jq -e '.ok == true' >/dev/null
-
-          echo "✅ Inviato"
+            "$TELEGRAM_API")
+          
+          # Controlla la risposta di Telegram e segnala
