@@ -1,128 +1,86 @@
-name: Morpho Steakhouse USDC (alt)
+name: Morpho Steakhouse USDC Telegram
 
 on:
   schedule:
-    # GitHub Actions è in UTC; a Roma: CET=UTC+1 / CEST=UTC+2
-    - cron: "0 6 * * *"    # 07:00 CET / 08:00 CEST
-    - cron: "0 11 * * *"   # 12:00 CET / 13:00 CEST
-    - cron: "0 16 * * *"   # 17:00 CET / 18:00 CEST
-    - cron: "0 21 * * *"   # 22:00 CET / 23:00 CEST
+    - cron: '0 6 * * *'   # 08:00 CEST / 07:00 CET
+    - cron: '0 11 * * *'  # 13:00 CEST / 12:00 CET
+    - cron: '0 16 * * *'  # 18:00 CEST / 17:00 CET
+    - cron: '0 21 * * *'  # 23:00 CEST / 22:00 CET
   workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-    env:
-      API_URL: "https://api.morpho.org/graphql"
-      VAULT_ADDRESS: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"  # Steakhouse USDC
-      CHAIN_ID: 1
-      TVL_THRESHOLD_USD: "20000000"    # valuta 50M se vuoi più prudenza
-      NET_APY_THRESHOLD: "0.04"        # 4% (decimale)
-      # Fallback ai nomi dei secrets usati nello script USDT
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN || secrets.TELEGRAM_BOT_TOKEN || secrets.BOT_TOKEN }}
-      CHAT_ID: ${{ secrets.CHAT_ID || secrets.TELEGRAM_CHAT_ID || secrets.CHANNEL_ID }}
-
     steps:
-      - name: Setup tools
-        shell: bash
+      - name: Check Morpho APY & Send Telegram
         run: |
-          set -Eeuo pipefail
-          sudo apt-get update >/dev/null && sudo apt-get install -y jq bc gawk >/dev/null
+          # Installa dipendenze necessarie: jq, bc e gawk
+          sudo apt-get update && sudo apt-get install -y jq bc gawk
 
-      - name: Fetch Morpho data
-        id: morpho
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          echo "📡 Recupero dati dal vault Morpho Steakhouse USDC..."
 
-          # Costruisci payload GraphQL
-          QUERY=$(jq -n \
-            --arg address "$VAULT_ADDRESS" \
-            --arg q 'query($address: String!, $chainId: Int!) { vaultByAddress(address: $address, chainId: $chainId) { state { totalAssetsUsd apy netApy } } }' \
-            --argjson chainId "$CHAIN_ID" \
-            '{query:$q, variables:{address:$address, chainId:$chainId}}')
+          # GraphQL query per vaultByAddress
+          # L'indirizzo del vault per Steakhouse USDC è 0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB
+          QUERY=$(cat <<'GRAPHQL'
+          {
+            "query": "query { vaultByAddress(address: \"0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB\", chainId: 1) { state { totalAssetsUsd apy netApy } } }"
+          }
+          GRAPHQL
+          )
 
-          # Chiamata API
-          TMP="/tmp/morpho_usdc.json"
-          HTTP_CODE=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
+          # Richiesta API Morpho
+          RESP=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -d "$QUERY" \
-            -o "$TMP" -w "%{http_code}" "$API_URL" || true)
-          echo "HTTP Morpho: $HTTP_CODE"
+            https://api.morpho.org/graphql)
 
-          # Controlli base
-          [[ -s "$TMP" ]] || { echo "❌ Nessun body ricevuto da Morpho"; exit 1; }
-          jq -e 'has("errors") | not' "$TMP" >/dev/null || { echo "❌ GraphQL errors:"; jq '.errors' "$TMP"; exit 1; }
-          jq -e '
-            has("data") and
-            .data|has("vaultByAddress") and
-            .data.vaultByAddress|has("state") and
-            (.data.vaultByAddress.state|has("totalAssetsUsd")) and
-            (.data.vaultByAddress.state|has("apy")) and
-            (.data.vaultByAddress.state|has("netApy"))
-          ' "$TMP" >/dev/null || { echo "❌ Struttura inattesa"; cat "$TMP"; exit 1; }
+          echo "DEBUG: Risposta API: $RESP"
 
-          # Estrai valori grezzi
-          TVL=$(jq -r '.data.vaultByAddress.state.totalAssetsUsd' "$TMP")
-          APY=$(jq -r '.data.vaultByAddress.state.apy' "$TMP")
-          NET_APY=$(jq -r '.data.vaultByAddress.state.netApy' "$TMP")
+          # Estrazione dati con jq (con gestione null)
+          TVL=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.totalAssetsUsd // "null"')
+          APY=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.apy // "null"')
+          NET_APY=$(echo "$RESP" | jq -r '.data.vaultByAddress.state.netApy // "null"')
 
-          # Formatta per il messaggio
-          TVL_M=$(awk -v tvl="$TVL" 'BEGIN { printf("%.2f", tvl/1000000) }')
-          APY_PERC=$(awk -v a="$APY" 'BEGIN { printf("%.2f", a*100) }')
-          NET_APY_PERC=$(awk -v a="$NET_APY" 'BEGIN { printf("%.2f", a*100) }')
+          echo "DEBUG: TVL estratto: $TVL"
+          echo "DEBUG: APY estratto: $APY"
+          echo "DEBUG: NET_APY estratto: $NET_APY"
 
-          # Valuta alert
-          ALERTS=""
-          if awk -v tvl="$TVL" -v thr="$TVL_THRESHOLD_USD" 'BEGIN { exit !(tvl < thr) }'; then
-            ALERTS+="⚠️ <b>ALERT TVL</b>: sotto $(printf "%'.0f" "$TVL_THRESHOLD_USD") USD.<br/>"
+          # Controllo se i dati sono validi
+          if [[ -z "$TVL" || "$TVL" == "null" || -z "$APY" || "$APY" == "null" || -z "$NET_APY" || "$NET_APY" == "null" ]]; then
+            MSG="❌ ERRORE: impossibile recuperare i dati dal vault Morpho. Controlla l'API o la query."
+          else
+            # Conversione dei valori (usa bc per floating point)
+            TVL_M=$(echo "scale=2; $TVL / 1000000" | bc | awk '{printf "%.2f", $0}')
+            APY_PERC=$(echo "scale=2; $APY * 100" | bc | awk '{printf "%.2f", $0}')
+            NET_APY_PERC=$(echo "scale=2; $NET_APY * 100" | bc | awk '{printf "%.2f", $0}')
+
+            # Messaggio base - MODIFICATO PER USDC
+            MSG="📊 Morpho – Steakhouse USDC\nTVL: ${TVL_M} M USD\nAPY lordo: ${APY_PERC}%\nAPY netto: ${NET_APY_PERC}%"
+
+            # Soglie per alert rischio alto (es. possibile hack)
+            TVL_THRESHOLD=20000000  # 20M USD
+            NET_APY_THRESHOLD=0.04  # 4% (come decimale)
+
+            ALERT=""
+            if (( $(echo "$TVL < $TVL_THRESHOLD" | bc -l) )); then
+              ALERT+="⚠️ **ALERT TVL**: Calo sotto 20M USD (possibile rischio alto, es. hack o exodus)!\n"
+            fi
+            if (( $(echo "$NET_APY < $NET_APY_THRESHOLD" | bc -l) )); then
+              ALERT+="⚠️ **ALERT APY**: Net APY sotto 4% (possibile instabilità o problema nel vault)!\n"
+            fi
+
+            # Aggiungi status "Tutto OK" o "Rischio Alto" basato su alert
+            if [[ ! -z "$ALERT" ]]; then
+              MSG="${MSG}\n\n${ALERT}❌ **Stato: Rischio Alto** 🚨\n**Azione consigliata**: Indaga su Morpho/Discord e considera withdraw."
+            else
+              MSG="${MSG}\n\n✅ **Stato: Tutto OK**"
+            fi
           fi
-          if awk -v a="$NET_APY" -v thr="$NET_APY_THRESHOLD" 'BEGIN { exit !(a < thr) }'; then
-            ALERTS+="⚠️ <b>ALERT APY</b>: sotto $(awk -v t="$NET_APY_THRESHOLD" "BEGIN{printf(\"%.0f%%\", t*100)}").<br/>"
-          fi
 
-          STATUS="✅ <b>Stato: Tutto OK</b>"
-          ACTION=""
-          if [[ -n "$ALERTS" ]]; then
-            STATUS="❌ <b>Stato: Rischio Alto</b> 🚨"
-            ACTION="<b>Verifica su Morpho/Discord</b> e valuta withdraw."
-          fi
+          echo "DEBUG: Messaggio finale: $MSG"
 
-          MSG="<b>Morpho – Steakhouse USDC</b><br/>TVL: ${TVL_M} M USD<br/>APY lordo: ${APY_PERC}%<br/>APY netto: ${NET_APY_PERC}%<br/><br/>${ALERTS}${STATUS}"
-          [[ -n "$ACTION" ]] && MSG="${MSG}<br/>${ACTION}"
-
-          # Esponi output per lo step successivo
-          {
-            echo "TVL_M=$TVL_M"
-            echo "APY_PERC=$APY_PERC"
-            echo "NET_APY_PERC=$NET_APY_PERC"
-            echo "MESSAGE<<EOF"
-            echo "$MSG"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Send Telegram
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          # Controlli secrets (fallback già in env)
-          [[ -n "${TELEGRAM_TOKEN:-}" ]] || { echo "❌ Nessun token Telegram nei secrets"; exit 1; }
-          [[ -n "${CHAT_ID:-}" ]] || { echo "❌ Nessun CHAT_ID nei secrets"; exit 1; }
-
-          # Messaggio dall'output precedente
-          MSG="${{ steps.morpho.outputs.MESSAGE }}"
-
-          PAYLOAD=$(jq -n \
-            --arg chat_id "$CHAT_ID" \
-            --arg text "$MSG" \
-            --arg mode "HTML" \
-            '{chat_id:$chat_id, text:$text, parse_mode:$mode, disable_web_page_preview:true}')
-
-          RESP=$(curl -sS --retry 3 --retry-delay 2 --max-time 20 \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage")
-
-          echo "Telegram response:"; echo "$RESP" | jq .
-          echo "$RESP" | jq -e '.ok == true' >/dev/null || { echo "❌ Invio Telegram fallito"; exit 1; }
+          # Invio messaggio a Telegram (con escaping per text)
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.CHAT_ID }}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown"
