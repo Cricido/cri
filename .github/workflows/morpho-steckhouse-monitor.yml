@@ -1,6 +1,6 @@
 name: Morpho Steakhouse Telegram
-
-#on:
+if: false #aggiunto da me per non girare 
+on:
   schedule:
     - cron: '0 6 * * *'   # 08:00 CEST
     - cron: '0 11 * * *'  # 13:00 CEST
